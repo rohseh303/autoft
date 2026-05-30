@@ -1,221 +1,170 @@
-"""Research agent: takes a user task, picks dataset/recipe, returns RunPlan."""
+"""Research agent: spawns the OpenAI Codex CLI inside the Modal container to
+inspect HuggingFace datasets and emit a validated RunPlan."""
 from __future__ import annotations
 
 import json
-
-import modal
+import os
+import shutil
+import subprocess
+import tempfile
+from pathlib import Path
 
 from backend.app import api_image, app, hf_secret, openai_secret
 
-OPENAI_MODEL = "gpt-4.1-mini"
+FIXTURES_DIR = Path("/root/fixtures")
+SUBPROCESS_TIMEOUT_SECONDS = 480
 
 
-# ----- HF Hub tool implementations (importable, run inside the api image) -----
+def _build_codex_prompt() -> str:
+    return """You are an autonomous fine-tuning research agent. You have shell + Python + filesystem access in this working directory.
 
-def _hf_search(query: str, task_filter: str | None = None, limit: int = 8) -> list[dict]:
-    from huggingface_hub import HfApi, DatasetFilter
+## Inputs (read these first)
+- `./task.json` — the user's task description, eval examples, and optional preferred model.
+- `./catalog.json` — 12 pre-verified (task_tags, hf_dataset, fields) entries. PREFER these when their tags match the user's task — they are known to work.
+- `./schema.json` — JSON Schema for the RunPlan you must produce. Your output MUST validate against it.
+- `./example_plan.json` — a complete RunPlan for the billsum legal-summarization task. Use it as a shape reference for the JSON you write.
 
-    api = HfApi()
-    kwargs = {"search": query, "limit": limit, "sort": "downloads", "direction": -1}
-    if task_filter:
-        try:
-            kwargs["filter"] = DatasetFilter(task_categories=task_filter)
-        except Exception:
-            pass
-    results = []
-    try:
-        for d in api.list_datasets(**kwargs):
-            results.append({
-                "id": d.id,
-                "downloads": getattr(d, "downloads", 0),
-                "tags": (getattr(d, "tags", []) or [])[:8],
-            })
-    except Exception as e:
-        return [{"error": str(e)}]
-    return results
+## Your job
+1. Read all the inputs above.
+2. Decide which HuggingFace dataset best matches the user's task.
+   - If any catalog entry's tags match the task, use that entry directly. Its fields and config are already verified.
+   - If no catalog entry fits, pick a dataset off the Hub. You MUST verify it before committing — run Python like:
+     ```python
+     from datasets import load_dataset
+     ds = load_dataset("<dataset_id>", "<config_or_None>", split="train", streaming=True)
+     row = next(iter(ds))
+     print(list(row.keys()))
+     print({k: str(v)[:200] for k, v in row.items()})
+     ```
+     Do not commit to `input_field` / `output_field` column names you have not printed.
+3. Pick relevant benchmarks (just human-readable labels — v1 does not run them).
+4. Write a tight `prompt_template` using literal `{input}` and `{output}` placeholders.
+5. Set a sane TrainingConfig for a small (0.5B–1.7B) LoRA fine-tune on a single L4 GPU.
 
-
-def _hf_peek(dataset: str, config: str | None = None, split: str = "train") -> dict:
-    """Look up a dataset's column schema + a few sample rows via datasets-server."""
-    import requests
-
-    base = "https://datasets-server.huggingface.co"
-    params = {"dataset": dataset}
-    if config:
-        params["config"] = config
-    try:
-        info = requests.get(f"{base}/info", params=params, timeout=15).json()
-    except Exception as e:
-        return {"error": f"info failed: {e}"}
-    configs = list((info.get("dataset_info") or {}).keys())
-    chosen_config = config or (configs[0] if configs else "default")
-    try:
-        rows = requests.get(
-            f"{base}/rows",
-            params={"dataset": dataset, "config": chosen_config, "split": split, "offset": 0, "length": 3},
-            timeout=15,
-        ).json()
-    except Exception as e:
-        return {"error": f"rows failed: {e}", "configs": configs}
-    features = rows.get("features", [])
-    columns = [f.get("name") for f in features]
-    samples = [{k: (str(v)[:200]) for k, v in r.get("row", {}).items()} for r in rows.get("rows", [])]
-    return {"configs": configs, "config_used": chosen_config, "columns": columns, "sample_rows": samples}
-
-
-# ----- Tool schemas exposed to the model -----
-
-TOOLS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "search_hf_datasets",
-            "description": "Search HuggingFace Hub for datasets matching a free-text query. Returns dataset IDs sorted by downloads.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string", "description": "Free-text search query"},
-                    "task_filter": {
-                        "type": "string",
-                        "description": "Optional HF task category filter (e.g. 'summarization', 'text-classification')",
-                    },
-                },
-                "required": ["query"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "peek_dataset",
-            "description": "Fetch column names + 3 sample rows from a dataset to verify schema before committing to it.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "dataset": {"type": "string"},
-                    "config": {"type": "string"},
-                    "split": {"type": "string", "default": "train"},
-                },
-                "required": ["dataset"],
-            },
-        },
-    },
-]
-
-
-def _build_system_prompt() -> str:
-    from shared.catalog import CATALOG
-
-    catalog_lines = []
-    for e in CATALOG:
-        catalog_lines.append(
-            f"- tags={e['task_tags']} dataset={e['hf_dataset']} "
-            f"config={e['dataset_config']} input={e['input_field']} output={e['output_field']} "
-            f"({e['description']})"
-        )
-    catalog_block = "\n".join(catalog_lines)
-    return f"""You are an autonomous fine-tuning research agent. The user describes a capability they want a small open-source LLM to have. You design a complete training recipe.
-
-Your job:
-1. Decide which HuggingFace dataset best matches the task.
-2. Decide which columns map to instruction (input_field) and target (output_field).
-3. Pick relevant benchmarks (just names; v1 doesn't run them).
-4. Write a tight prompt_template using {{input}} and {{output}}.
-5. Set sane TrainingConfig for a small (0.5B-1.7B) model with LoRA on a single L4 GPU.
-
-You have tools: `search_hf_datasets` and `peek_dataset`. ALWAYS `peek_dataset` before committing to a dataset that is not in the preferred catalog below — to confirm the column names you'll use actually exist.
-
-PREFERRED CATALOG (use these whenever a tag matches the user's task — they are pre-verified):
-{catalog_block}
-
-Guidance:
-- max_steps default 150 for tiny models; raise to 250 only if task is complex.
-- batch_size 2, gradient_accumulation_steps 4, lora_r 16, lora_alpha 16.
-- Choose dataset_split like "train[:2000]" or "train[:3000]" — keep it small for fast feedback.
+## Training guidance (defaults — override only with a reason)
+- `max_steps`: 150 for tiny models; up to 250 only if the task is genuinely complex.
+- `batch_size`: 2, `gradient_accumulation_steps`: 4, `lora_r`: 16, `lora_alpha`: 16, `max_seq_length`: 2048.
+- `dataset_split`: prefer `train[:2000]` or `train[:3000]` — keep it small for fast feedback.
 - Prefer datasets with a clear instruction-style schema. Avoid datasets where input or output is deeply nested.
-- prompt_template must contain literally "{{input}}" and "{{output}}" placeholders.
-- reasoning: 2-3 sentences explaining your dataset + recipe choice in plain English.
+- `reasoning`: 2–3 sentences explaining your dataset + recipe choice in plain English. Shown to the user.
 
-When you have decided, return the final RunPlan as JSON matching the schema.
+## Output contract
+When you have decided, write your final RunPlan as JSON to `./plan.json`. It MUST validate against `./schema.json`. Do not write anything else to that file. After writing, exit.
 """
 
 
-@app.function(image=api_image, secrets=[openai_secret, hf_secret], timeout=300)
-def research(task_description: str, eval_examples: list[dict], preferred_model: str | None) -> dict:
-    """Run the research agent. Returns a validated RunPlan as a dict."""
-    from openai import OpenAI
+@app.function(
+    image=api_image,
+    secrets=[openai_secret, hf_secret],
+    timeout=540,
+)
+def research(
+    task_description: str,
+    eval_examples: list[dict],
+    preferred_model: str | None,
+) -> dict:
+    """Run the Codex-powered research agent. Returns a validated RunPlan as a dict."""
+    from shared.catalog import CATALOG
     from shared.schemas import RunPlan
 
-    client = OpenAI()
-    schema = RunPlan.model_json_schema()
-    schema = _inline_refs(schema)
-
-    user_msg = {
-        "role": "user",
-        "content": json.dumps({
-            "task_description": task_description,
-            "eval_examples": eval_examples,
-            "preferred_model": preferred_model,
-        }),
-    }
-    messages = [
-        {"role": "system", "content": _build_system_prompt()},
-        user_msg,
-    ]
-
-    for _ in range(6):  # tool-use loop, max 6 rounds
-        resp = client.chat.completions.create(
-            model=OPENAI_MODEL,
-            messages=messages,
-            tools=TOOLS,
-            tool_choice="auto",
-            response_format={
-                "type": "json_schema",
-                "json_schema": {"name": "RunPlan", "schema": schema, "strict": False},
-            },
+    # Scratch under /root (not /tmp) — Codex CLI refuses to install its helper
+    # binaries when codex_home sits under a temp dir.
+    scratch_root = Path("/root/codex-scratch")
+    scratch_root.mkdir(parents=True, exist_ok=True)
+    scratch = Path(tempfile.mkdtemp(prefix="codex-research-", dir=str(scratch_root)))
+    try:
+        (scratch / "task.json").write_text(
+            json.dumps(
+                {
+                    "task_description": task_description,
+                    "eval_examples": eval_examples,
+                    "preferred_model": preferred_model,
+                },
+                indent=2,
+            )
         )
-        msg = resp.choices[0].message
-        if msg.tool_calls:
-            messages.append({"role": "assistant", "tool_calls": [tc.model_dump() for tc in msg.tool_calls], "content": msg.content or ""})
-            for tc in msg.tool_calls:
-                name = tc.function.name
-                args = json.loads(tc.function.arguments or "{}")
-                if name == "search_hf_datasets":
-                    result = _hf_search(args.get("query", ""), args.get("task_filter"))
-                elif name == "peek_dataset":
-                    result = _hf_peek(args.get("dataset", ""), args.get("config"), args.get("split", "train"))
-                else:
-                    result = {"error": f"unknown tool {name}"}
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tc.id,
-                    "content": json.dumps(result)[:4000],
-                })
-            continue
-        # No tool calls — model should have produced the final JSON.
-        content = msg.content or "{}"
-        plan_dict = json.loads(content)
-        # Apply preferred model override if user specified one
+        (scratch / "catalog.json").write_text(json.dumps(CATALOG, indent=2))
+        (scratch / "schema.json").write_text(
+            json.dumps(RunPlan.model_json_schema(), indent=2)
+        )
+        example_plan_path = FIXTURES_DIR / "billsum_plan.json"
+        if example_plan_path.exists():
+            (scratch / "example_plan.json").write_text(example_plan_path.read_text())
+        prompt = _build_codex_prompt()
+
+        # HOME=scratch so Codex's per-user config (~/.codex) lives in the
+        # request's scratch dir, not in /root — keeps parallel requests from
+        # stomping each other and gets cleaned up with the dir.
+        env = {**os.environ, "HOME": str(scratch)}
+
+        # Codex CLI (recent versions) reads the API key from ~/.codex/auth.json
+        # for the Responses API path, not from $OPENAI_API_KEY. Pre-populate it.
+        codex_home = scratch / ".codex"
+        codex_home.mkdir(parents=True, exist_ok=True)
+        (codex_home / "auth.json").write_text(
+            json.dumps({"OPENAI_API_KEY": os.environ["OPENAI_API_KEY"]})
+        )
+
+        try:
+            proc = subprocess.run(
+                [
+                    "codex",
+                    "exec",
+                    "--cd",
+                    str(scratch),
+                    # Modal container is already our sandbox; nested bubblewrap
+                    # inside Modal fails on kernel-namespace permissions.
+                    "--sandbox",
+                    "danger-full-access",
+                    "--skip-git-repo-check",
+                    prompt,
+                ],
+                cwd=str(scratch),
+                env=env,
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
+                timeout=SUBPROCESS_TIMEOUT_SECONDS,
+            )
+        except subprocess.TimeoutExpired as e:
+            stdout_tail = (e.stdout or "")[-2000:] if isinstance(e.stdout, str) else ""
+            stderr_tail = (e.stderr or "")[-2000:] if isinstance(e.stderr, str) else ""
+            raise RuntimeError(
+                f"codex exceeded {SUBPROCESS_TIMEOUT_SECONDS}s timeout. "
+                f"stdout_tail={stdout_tail} stderr_tail={stderr_tail}"
+            ) from e
+
+        plan_path = scratch / "plan.json"
+        if not plan_path.exists():
+            raise RuntimeError(
+                f"codex did not write plan.json (exit={proc.returncode}). "
+                f"stdout_tail={proc.stdout[-2000:]} stderr_tail={proc.stderr[-2000:]}"
+            )
+
+        plan_dict = json.loads(plan_path.read_text())
         if preferred_model:
             plan_dict["base_model"] = preferred_model
-        plan = RunPlan.model_validate(plan_dict)
-        return plan.model_dump()
+        return RunPlan.model_validate(plan_dict).model_dump()
 
-    raise RuntimeError("Research agent exceeded tool-use loop budget")
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
 
 
-def _inline_refs(schema: dict) -> dict:
-    """Pydantic emits $defs/$ref which some OpenAI clients reject when strict=true. Inline them."""
-    defs = schema.pop("$defs", {})
+@app.local_entrypoint()
+def smoke(
+    task_description: str = "summarize legal contracts",
+    eval_examples_json: str = "[]",
+    preferred_model: str = "",
+) -> None:
+    """CLI smoke test: `modal run -m backend.research_agent::smoke`.
 
-    def _walk(node):
-        if isinstance(node, dict):
-            if "$ref" in node:
-                ref_name = node["$ref"].split("/")[-1]
-                return _walk(defs.get(ref_name, {}))
-            return {k: _walk(v) for k, v in node.items()}
-        if isinstance(node, list):
-            return [_walk(x) for x in node]
-        return node
-
-    return _walk(schema)
+    Wraps research() with CLI-friendly arg types since modal's CLI can't
+    parse list[dict] annotations directly.
+    """
+    eval_examples = json.loads(eval_examples_json)
+    plan = research.remote(
+        task_description,
+        eval_examples,
+        preferred_model or None,
+    )
+    print(json.dumps(plan, indent=2))

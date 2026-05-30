@@ -7,17 +7,32 @@ APP_NAME = "autoft"
 
 app = modal.App(APP_NAME)
 
-# Image for the research agent + API endpoints (no GPU deps needed)
+# Image for the research agent + API endpoints (no GPU deps needed).
+# Includes Node + the OpenAI Codex CLI so the research agent can run Codex as
+# a subprocess to autonomously inspect HF datasets and emit a RunPlan.
 api_image = (
     modal.Image.debian_slim(python_version="3.11")
+    .apt_install("curl", "ca-certificates", "gnupg")
+    .run_commands(
+        # Debian slim ships an old node; pull node 20 from nodesource so the
+        # Codex CLI's minimum-version check passes.
+        "curl -fsSL https://deb.nodesource.com/setup_20.x | bash -",
+        "apt-get install -y nodejs",
+        "npm install -g @openai/codex",
+    )
     .pip_install(
         "pydantic>=2.0",
         "openai>=1.50.0",
         "huggingface_hub>=0.24.0",
+        "datasets>=2.19.0",
         "requests>=2.31.0",
         "fastapi[standard]",
     )
     .add_local_python_source("shared", "backend")
+    .add_local_dir(
+        "fixtures",
+        remote_path="/root/fixtures",
+    )
 )
 
 # Image for training. Pip pins removed — let Unsloth resolve its own compatible
