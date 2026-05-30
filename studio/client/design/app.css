@@ -192,6 +192,54 @@ body[data-theater="on"] .wire-base { stroke: var(--wire); }
 .wl-text { color: var(--ghost-2); }
 .words-cap { margin-top: auto; padding-top: 12px; font-size: 11px; color: var(--ghost-2); }
 
+/* ===== METRIC SMALL-MULTIPLES (wandb-style, hand-rolled) ================ */
+.mc-row { display: grid; grid-template-columns: 1fr; gap: 14px; margin-top: 22px; }
+@media (min-width: 720px) { .mc-row { grid-template-columns: repeat(3, 1fr); } }
+.mc-panel { padding: 14px 16px; }
+.mc-now { font-size: 16px; color: var(--ghost); }
+.mc-accent .mc-now { color: var(--phosphor); }
+/* normalize chart heights across the row (loss chart is taller by default) */
+.mc-panel .loss-svg { height: 132px; }
+.mc-svg { height: 132px; }
+
+/* ===== TRANSPARENCY PANEL (reasoning timeline + logs, tabbed) =========== */
+.th-transparency { display: flex; flex-direction: column; min-height: 320px; }
+.th-tabs { display: flex; gap: 6px; }
+.th-tab {
+  background: var(--void-3); border: 1px solid var(--wire); color: var(--ghost-2);
+  border-radius: 999px; padding: 3px 12px; font-size: 12px; font-family: var(--mono);
+  display: inline-flex; align-items: center; gap: 6px; transition: all var(--t-fast);
+}
+.th-tab:hover { color: var(--ghost); border-color: var(--ghost-2); }
+.th-tab.on { color: var(--void); background: var(--phosphor); border-color: var(--phosphor); }
+.th-tab-n { font-size: 10px; opacity: 0.8; }
+
+/* reasoning timeline */
+.rt-list { margin-top: 12px; display: flex; flex-direction: column; gap: 8px; overflow: auto; max-height: 300px; }
+.rt-empty { margin-top: 12px; color: var(--ghost-2); font-size: 13px; }
+.rt-row { display: flex; gap: 9px; align-items: baseline; font-size: 13px; padding-bottom: 7px; border-bottom: 1px dashed var(--wire); }
+.rt-src {
+  flex: none; width: 62px; font-size: 9.5px; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--ghost-2); border-left: 2px solid var(--wire); padding-left: 6px;
+}
+.rt-src-research .rt-src { color: var(--signal-dark); border-color: var(--signal-dark); }
+.rt-src-trainer  .rt-src { color: var(--phosphor);    border-color: var(--phosphor); }
+.rt-src-judge    .rt-src { color: var(--ghost);       border-color: var(--ghost); }
+.rt-src-lead     .rt-src { color: var(--signal-2);    border-color: var(--signal-2); }
+.rt-ic { flex: none; color: var(--ghost-2); width: 12px; text-align: center; }
+.rt-body { flex: 1; min-width: 0; }
+.rt-text { color: var(--ghost); }
+.rt-step { color: var(--ghost-2); font-size: 11px; }
+.rt-detail { color: var(--ghost-2); font-size: 11px; margin-top: 2px; word-break: break-word; opacity: 0.8; }
+.rt-ts { flex: none; color: var(--ghost-2); font-size: 10px; opacity: 0.7; }
+
+/* log stream */
+.ls { margin-top: 12px; overflow: auto; max-height: 300px; background: var(--void); border: 1px solid var(--wire); border-radius: var(--r-sm); padding: 10px 12px; }
+.ls-empty { color: var(--ghost-2); font-size: 12px; }
+.ls-line { font-size: 11.5px; line-height: 1.5; color: var(--ghost-2); white-space: pre-wrap; word-break: break-word; }
+.ls-err { color: var(--signal-dark); }
+.ls-meta { color: var(--phosphor-dim); }
+
 /* ===== REVEAL =========================================================== */
 .reveal { display: flex; flex-direction: column; gap: 20px; }
 .rv-head { position: relative; }

@@ -1,16 +1,16 @@
 # AutoFT — autonomous fine-tuning on Modal
 
-Paste a task ("I want a model that summarizes legal contracts"), an OpenAI-powered research
-agent picks a HuggingFace dataset and a recipe, Modal trains a LoRA on a 0.5B-1.7B model,
-the dashboard streams live metrics, and you get a before/after comparison on your own examples.
+Paste a task ("I want a model that summarizes legal contracts"), a Codex-powered research
+agent picks a HuggingFace dataset and a recipe, Modal trains a LoRA on Qwen3.5-2B,
+the dashboard plots live metrics, and you get a before/after comparison on your own examples.
 
 ## Stack
 
-- **Compute:** Modal (L4 GPU)
-- **Fine-tuning:** Unsloth + TRL SFTTrainer (4-bit, LoRA r=16)
-- **Models:** Qwen2.5-0.5B-Instruct, SmolLM2-1.7B-Instruct
-- **Research agent:** OpenAI GPT (gpt-4.1-mini) with structured outputs + HF Hub tool use
-- **Frontend:** Next.js 15 (App Router) + Tremor charts + SSE
+- **Compute:** Modal (H200 GPU)
+- **Fine-tuning:** Unsloth + HF Trainer (bf16, LoRA r=16)
+- **Models:** Qwen3.5-2B (bf16 LoRA)
+- **Research agent:** OpenAI Codex CLI (emits a structured RunPlan) + `gpt-5.4-mini` elementwise judge
+- **Frontends:** `studio/` (Bun + Elysia BFF + React/Vite, polled metrics + reasoning + logs) and `frontend/` (Next.js 15)
 - **Dataset discovery:** `huggingface_hub` + HF `datasets-server` REST
 
 ## Setup
@@ -52,7 +52,7 @@ modal run backend/research_agent.py::research --task-description "summarize lega
 ## Architecture
 
 ```
-Next.js UI                Modal (api_image)              Modal (train_image, L4)
+Next.js UI                Modal (api_image)              Modal (train_image, H200)
 ─────────                 ───────────────────             ─────────────────────────
 TaskForm   ─POST /research─▶ research_agent
                             (OpenAI + HF tools)

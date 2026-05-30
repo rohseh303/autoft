@@ -18,7 +18,7 @@ uv run modal run backend/train.py::trial
 ```
 
 It reads `plan.json` (the recipe) and `eval.json` (the held-out test), trains a
-LoRA on a Modal L4 GPU, computes held-out eval loss, and has an LLM judge score
+LoRA on a Modal H200 GPU, computes held-out eval loss, and has an LLM judge score
 the fine-tuned outputs. It writes two files:
 
 - **`result.json`** — the latest trial's full result: `objective`,
@@ -63,7 +63,7 @@ out-of-range values:
 | `training.max_steps` | 10–2000 | 150 | raise if eval_loss still dropping; lower if overfitting |
 | `training.lora_r` | 4–128 | 16 | capacity; raise for harder tasks (pair with alpha) |
 | `training.lora_alpha` | 4–128 | 32 | 2×r heuristic (Unsloth cookbook) |
-| `training.batch_size` | 1–16 | 2 | L4 is memory-bound; raise with care |
+| `training.batch_size` | 1–16 | 2 | H200 has VRAM headroom for a 2B model; raise for throughput |
 | `training.gradient_accumulation_steps` | 1–32 | 8 | effective batch = batch_size × this (=16) |
 | `training.warmup_steps` | ≥ 0 | 10 | |
 | `training.max_seq_length` | 256–8192 | 2048 | lower = faster when inputs are short |
@@ -105,8 +105,8 @@ express — e.g. the LoRA `target_modules` (currently all 7 projections),
 
 ## Budget & stop rule
 
-- **Default budget: 6 trials.** Each is ~2–4 min on an L4. Don't blow past it
-  without a reason.
+- **Default budget: 6 trials.** Each is ~3–6 min on an H200 (the first trial also
+  pays a one-time Qwen3.5 Mamba-kernel compile). Don't blow past it without a reason.
 - **Stop early** if 2 consecutive trials fail to beat the best objective by more
   than ~0.3 judge points, or if `judge_score` ≥ 8.5.
 - **Never launch trials in parallel** — one GPU job at a time.

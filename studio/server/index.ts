@@ -14,12 +14,15 @@ import type { RunPlan, UserRequest } from "../shared/types";
 import {
   mockPlan, mockThoughts, mockResult,
   lossAt, lrAt, gradAt, sampleAt, sleep,
+  simulateMetrics, simulateEvents, mockLogLines,
 } from "./mock";
 
 const MODAL = process.env.MODAL_API_BASE?.replace(/\/$/, "") || "";
 const MOCK = MODAL === "";
 const PORT = Number(process.env.PORT ?? 8787);
 const DIST = join(import.meta.dir, "..", "dist");
+// Deployed Modal app whose container logs we tail for the live log pane.
+const MODAL_APP = process.env.AUTOFT_MODAL_APP || "autoft";
 
 const sseHeaders = {
   "Content-Type": "text/event-stream",
@@ -28,8 +31,64 @@ const sseHeaders = {
   "X-Accel-Buffering": "no",
 };
 
-// in-memory run store for mock mode
-const runs = new Map<string, { plan: RunPlan; req: UserRequest }>();
+// in-memory run store for mock mode (startedAt drives the wall-clock simulation)
+const runs = new Map<string, { plan: RunPlan; req: UserRequest; startedAt: number }>();
+
+// Live container logs for real mode. The user's instruction: logs are "emitted
+// by the modal CLI -- this does not require exposing an endpoint." So we shell
+// out to `modal app logs <app>` (which tails + follows) and re-emit each line as
+// an SSE `log` event. Requires the `modal` CLI on PATH and authed on this host.
+function streamModalLogs(runId: string): Response {
+  let proc: ReturnType<typeof Bun.spawn> | null = null;
+  const stream = new ReadableStream({
+    start(controller) {
+      const enc = new TextEncoder();
+      const send = (ev: string, data: unknown) =>
+        controller.enqueue(enc.encode(`event: ${ev}\ndata: ${JSON.stringify(data)}\n\n`));
+
+      try {
+        proc = Bun.spawn(["modal", "app", "logs", MODAL_APP], { stdout: "pipe", stderr: "pipe", stdin: "ignore" });
+      } catch (err) {
+        send("log", { line: `[studio] could not start \`modal app logs ${MODAL_APP}\`: ${String(err)}`, stream: "stderr" });
+        send("eof", { ok: false });
+        controller.close();
+        return;
+      }
+      send("log", { line: `[studio] tailing \`modal app logs ${MODAL_APP}\` (run ${runId})`, stream: "meta" });
+
+      const pump = async (rs: ReadableStream<Uint8Array> | null, which: "stdout" | "stderr") => {
+        if (!rs) return;
+        const reader = rs.getReader();
+        const dec = new TextDecoder();
+        let buf = "";
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buf += dec.decode(value, { stream: true });
+          let idx: number;
+          while ((idx = buf.indexOf("\n")) !== -1) {
+            const line = buf.slice(0, idx); buf = buf.slice(idx + 1);
+            if (line.trim()) send("log", { line, stream: which });
+          }
+        }
+        if (buf.trim()) send("log", { line: buf, stream: which });
+      };
+
+      Promise.allSettled([
+        pump(proc.stdout as ReadableStream<Uint8Array>, "stdout"),
+        pump(proc.stderr as ReadableStream<Uint8Array>, "stderr"),
+      ]).then(() => {
+        send("eof", { ok: true });
+        try { controller.close(); } catch { /* already closed */ }
+      });
+    },
+    // Client disconnected (EventSource closed) — kill the tail so it doesn't leak.
+    cancel() {
+      try { proc?.kill(); } catch { /* already gone */ }
+    },
+  });
+  return new Response(stream, { headers: sseHeaders });
+}
 
 const app = new Elysia()
   .use(cors())
@@ -40,7 +99,13 @@ const app = new Elysia()
     const req = body as UserRequest;
     if (MOCK) {
       await sleep(450);
-      return mockPlan(req);
+      // Same {plan, events} contract the real backend returns. events carry the
+      // research agent's reasoning trace (source="research") for the notebook.
+      const events = mockThoughts(req).map((t) => ({
+        ts: null, source: "research", kind: t.kind, text: t.text,
+        step: null, detail: t.detail ?? null,
+      }));
+      return { plan: mockPlan(req), events };
     }
     const r = await fetch(`${MODAL}/research`, {
       method: "POST",
@@ -48,7 +113,7 @@ const app = new Elysia()
       body: JSON.stringify(req),
     });
     if (!r.ok) return new Response(`research failed: ${r.status}`, { status: 502 });
-    return r.json();
+    return r.json(); // { plan, events }
   })
 
   // --- research as a live thought stream (mock-only enhancement) -----------
@@ -76,7 +141,11 @@ const app = new Elysia()
     const { plan, eval_examples } = body as { plan: RunPlan; eval_examples: UserRequest["eval_examples"] };
     if (MOCK) {
       const run_id = `mock-${Math.random().toString(36).slice(2, 10)}`;
-      runs.set(run_id, { plan, req: { task_description: plan.task_summary, eval_examples: eval_examples ?? [] } });
+      runs.set(run_id, {
+        plan,
+        req: { task_description: plan.task_summary, eval_examples: eval_examples ?? [] },
+        startedAt: Date.now(),
+      });
       return { run_id };
     }
     const r = await fetch(`${MODAL}/train`, {
@@ -146,6 +215,54 @@ const app = new Elysia()
     const r = await fetch(`${MODAL}/run/${params.id}/result`);
     if (!r.ok) return new Response("result not ready", { status: r.status });
     return r.json();
+  })
+
+  // --- metrics snapshot (POLLED continuously by the charts) ----------------
+  // { status, metrics: StepMetric[], result, samples? } — the frontend polls
+  // this in a loop and plots loss / lr / grad_norm (wandb-style, no wandb).
+  .get("/api/run/:id/metrics", async ({ params }) => {
+    if (!MOCK) {
+      const r = await fetch(`${MODAL}/run/${params.id}/metrics`);
+      if (!r.ok) return new Response(`metrics failed: ${r.status}`, { status: 502 });
+      return r.json();
+    }
+    const e = runs.get(params.id);
+    if (!e) return { status: { run_id: params.id, state: "failed", message: "unknown run", plan: null }, metrics: [], result: null, samples: [] };
+    return simulateMetrics(params.id, e.plan, e.req, (Date.now() - e.startedAt) / 1000);
+  })
+
+  // --- transparency timeline (POLLED) --------------------------------------
+  // { events: RunEvent[] } — source-tagged reasoning/status beats. Shows which
+  // subagent (research / trainer / judge) did what, and at which step.
+  .get("/api/run/:id/events", async ({ params }) => {
+    if (!MOCK) {
+      const r = await fetch(`${MODAL}/run/${params.id}/events`);
+      if (!r.ok) return new Response(`events failed: ${r.status}`, { status: 502 });
+      return r.json();
+    }
+    const e = runs.get(params.id);
+    if (!e) return { events: [] };
+    return { events: simulateEvents(params.id, e.plan, (Date.now() - e.startedAt) / 1000) };
+  })
+
+  // --- live logs (STREAMED) ------------------------------------------------
+  // Real: tails `modal app logs` (CLI, no Modal HTTP endpoint). Mock: synthesizes
+  // a believable container log, paced out so it feels live. SSE `log` events.
+  .get("/api/run/:id/logs", ({ params }) => {
+    if (!MOCK) return streamModalLogs(params.id);
+    const e = runs.get(params.id);
+    const lines = e ? mockLogLines(e.plan, e.req) : ["[studio] unknown run"];
+    const stream = new ReadableStream({
+      async start(c) {
+        const enc = new TextEncoder();
+        const send = (ev: string, data: unknown) =>
+          c.enqueue(enc.encode(`event: ${ev}\ndata: ${JSON.stringify(data)}\n\n`));
+        for (const line of lines) { send("log", { line, stream: "stdout" }); await sleep(260); }
+        send("eof", { ok: true });
+        c.close();
+      },
+    });
+    return new Response(stream, { headers: sseHeaders });
   })
 
   // --- static client (prod) -----------------------------------------------

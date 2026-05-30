@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import type { RunPlan, RunResult, UserRequest } from "@shared/types";
 import { health, research, researchStream, train } from "./lib/api";
-import { useRunStream } from "./lib/useRunStream";
+import { useRunMonitor } from "./lib/useRunStream";
 import { Landing } from "./scenes/Landing";
 import { Studio } from "./scenes/Studio";
 import { Deck } from "./components/Deck";
@@ -19,8 +19,9 @@ export function App() {
   const [result, setResult] = useState<RunResult | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // Run stream lifted to App so the bottom Deck reads live metrics in any scene.
-  const stream = useRunStream(runId);
+  // Run monitor lifted to App so the bottom Deck reads live metrics in any scene.
+  // Polls /metrics + /events continuously until the run is done.
+  const stream = useRunMonitor(runId);
 
   useEffect(() => { health().then((h) => setMode(h.mode)).catch(() => {}); }, []);
 
@@ -51,7 +52,10 @@ export function App() {
         plan: (p) => setPlan(p),
       });
       if (!streamed) {
-        const p = await research(request); // real-backend fallback (no thought stream yet)
+        // Real backend: research returns {plan, events}. Replay the agent's
+        // captured reasoning into the notebook, then show the plan.
+        const { plan: p, events } = await research(request);
+        setThoughts(events.map((e) => ({ kind: e.kind, text: e.text, detail: e.detail ?? undefined })));
         setPlan(p);
       }
       setPhase("plan");
@@ -92,6 +96,7 @@ export function App() {
             plan={plan}
             thoughts={thoughts}
             stream={stream}
+            runId={runId}
             error={error}
             onApprove={approve}
             onReset={reset}

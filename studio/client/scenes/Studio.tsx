@@ -14,11 +14,12 @@ export function Studio(props: {
   plan: RunPlan | null;
   thoughts: Thought[];
   stream: RunStream;
+  runId: string | null;
   error: string | null;
   onApprove: (p: RunPlan) => void;
   onReset: () => void;
 }) {
-  const { phase, plan, thoughts, stream, error, onApprove, onReset } = props;
+  const { phase, plan, thoughts, stream, runId, error, onApprove, onReset } = props;
 
   return (
     <div className="studio">
@@ -37,7 +38,7 @@ export function Studio(props: {
         )}
 
         {phase === "train" && plan && (
-          <Theater plan={plan} stream={stream} />
+          <Theater plan={plan} stream={stream} runId={runId} />
         )}
 
         {phase === "done" && stream.result && (

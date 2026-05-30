@@ -16,7 +16,7 @@ const EXAMPLES = [
 
 export function TaskForm({ onSubmit, loading }: Props) {
   const [task, setTask] = useState("");
-  const [model, setModel] = useState<BaseModelName>("Qwen2.5-0.5B-Instruct");
+  const [model, setModel] = useState<BaseModelName>("Qwen3.5-2B");
   const [examples, setExamples] = useState<EvalExample[]>([
     { input: "", expected_output: "" },
   ]);
@@ -74,8 +74,7 @@ export function TaskForm({ onSubmit, loading }: Props) {
         onChange={(e) => setModel(e.target.value as BaseModelName)}
         className="w-full bg-slate-900/60 border border-slate-700 rounded-lg px-4 py-2 text-slate-100"
       >
-        <option value="Qwen2.5-0.5B-Instruct">Qwen2.5-0.5B-Instruct (fastest)</option>
-        <option value="SmolLM2-1.7B-Instruct">SmolLM2-1.7B-Instruct (stronger)</option>
+        <option value="Qwen3.5-2B">Qwen3.5-2B (bf16 LoRA)</option>
       </select>
 
       <label className="block text-sm font-medium text-slate-300 mt-6 mb-2">

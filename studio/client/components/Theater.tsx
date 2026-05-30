@@ -1,12 +1,20 @@
+import { useState } from "react";
 import type { RunPlan } from "@shared/types";
 import type { RunStream } from "../lib/useRunStream";
-import { LossChart } from "./LossChart";
+import { useRunLogs } from "../lib/useRunStream";
+import { MetricCharts } from "./MetricCharts";
+import { ReasoningTimeline } from "./ReasoningTimeline";
+import { LogStream } from "./LogStream";
 
-// The dark "Mission Control" training stage. Two heroes: the loss curve and —
-// the showpiece — the model's own words sharpening from gibberish to coherent.
-// Purely presentational: the stream is owned by App (so the Deck shares it).
-export function Theater({ plan, stream }: { plan: RunPlan; stream: RunStream }) {
-  const { status, latest, points, samples } = stream;
+// The dark "Mission Control" training stage. Three heroes now: the metric
+// small-multiples (loss / lr / grad), a transparent timeline of what every
+// subagent is doing, and — the showpiece — the model's own words sharpening.
+// Metrics + events are polled (owned by App, shared with the Deck); the raw log
+// is streamed here since it's theater-only.
+export function Theater({ plan, stream, runId }: { plan: RunPlan; stream: RunStream; runId: string | null }) {
+  const { status, latest, points, lrPoints, gradPoints, samples, events } = stream;
+  const [tab, setTab] = useState<"reasoning" | "logs">("reasoning");
+  const logs = useRunLogs(runId);
 
   const state = status?.state ?? "pending";
   const pct = latest ? Math.round((latest.step / plan.training.max_steps) * 100) : 0;
@@ -18,6 +26,7 @@ export function Theater({ plan, stream }: { plan: RunPlan; stream: RunStream }) 
         <span className="live-dot" /> <span className="kicker" style={{ color: "var(--ghost-2)" }}>training · {state}</span>
         <span className="th-meta mono">
           {latest ? `step ${latest.step}/${plan.training.max_steps}` : "warming up…"}
+          {latest?.epoch != null && ` · epoch ${latest.epoch.toFixed(2)}`}
           {latest?.elapsed_seconds != null && ` · ${latest.elapsed_seconds.toFixed(0)}s`}
         </span>
       </div>
@@ -25,17 +34,24 @@ export function Theater({ plan, stream }: { plan: RunPlan; stream: RunStream }) 
       <div className="th-progress"><div className="th-bar" style={{ width: `${pct}%` }} /></div>
       {state === "loading" && <div className="th-status mono">{status?.message}<span className="caret" /></div>}
 
+      <MetricCharts points={points} lrPoints={lrPoints} gradPoints={gradPoints} latest={latest} maxStep={plan.training.max_steps} />
+
       <div className="th-grid">
-        <div className="th-panel th-loss">
-          <div className="th-panel-h"><span className="kicker">loss</span>
-            <span className="mono th-now">{latest?.loss != null ? latest.loss.toFixed(4) : "—"}</span>
+        <div className="th-panel th-transparency">
+          <div className="th-panel-h">
+            <div className="th-tabs">
+              <button className={`th-tab${tab === "reasoning" ? " on" : ""}`} onClick={() => setTab("reasoning")}>
+                reasoning <span className="th-tab-n mono">{events.length}</span>
+              </button>
+              <button className={`th-tab${tab === "logs" ? " on" : ""}`} onClick={() => setTab("logs")}>
+                logs <span className="th-tab-n mono">{logs.lines.length}</span>
+              </button>
+            </div>
+            <span className="kicker">transparency</span>
           </div>
-          <LossChart points={points} maxStep={plan.training.max_steps} />
-          <div className="th-kpis">
-            <Kpi label="grad norm" v={latest?.grad_norm != null ? latest.grad_norm.toFixed(3) : "—"} />
-            <Kpi label="lr" v={latest?.learning_rate != null ? latest.learning_rate.toExponential(1) : "—"} />
-            <Kpi label="epoch" v={latest?.epoch != null ? latest.epoch.toFixed(2) : "—"} />
-          </div>
+          {tab === "reasoning"
+            ? <ReasoningTimeline events={events} />
+            : <LogStream lines={logs.lines} done={logs.done} />}
         </div>
 
         <div className="th-panel th-words">
@@ -59,8 +75,4 @@ export function Theater({ plan, stream }: { plan: RunPlan; stream: RunStream }) 
       </div>
     </div>
   );
-}
-
-function Kpi({ label, v }: { label: string; v: string }) {
-  return <div className="kpi"><span className="kicker">{label}</span><span className="mono kpi-v">{v}</span></div>;
 }

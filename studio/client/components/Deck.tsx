@@ -2,10 +2,10 @@ import type { RunPlan, RunResult } from "@shared/types";
 import type { Phase, Thought } from "../App";
 import type { RunStream } from "../lib/useRunStream";
 
-// L4 on Modal is ~$0.80/hr. We only ever show this as an ESTIMATE — in demo
+// H200 on Modal is ~$3.95/hr. We only ever show this as an ESTIMATE — in demo
 // mode nothing is billed, and even live we don't know the exact rate. Honesty
 // is the point (the Critic's note): the chip always reads "est.".
-const L4_PER_SEC = 0.8 / 3600;
+const GPU_PER_SEC = 3.95 / 3600;
 
 // The persistent Telemetry Deck — pinned to the bottom in every scene. The
 // through-line of the whole app: always present, always alive, never in the way.
@@ -19,8 +19,8 @@ export function Deck({ phase, mode, plan, thoughts, stream, result }: {
   const elapsed =
     phase === "done" ? estTotalSeconds(plan)
     : latest?.elapsed_seconds ?? 0;
-  const cost = elapsed * L4_PER_SEC;
-  const projected = estTotalSeconds(plan) * L4_PER_SEC; // full-run projection
+  const cost = elapsed * GPU_PER_SEC;
+  const projected = estTotalSeconds(plan) * GPU_PER_SEC; // full-run projection
 
   const left = (() => {
     switch (phase) {
@@ -51,7 +51,7 @@ export function Deck({ phase, mode, plan, thoughts, stream, result }: {
             <span className="deck-sep" />
           </>
         )}
-        <Stat label="gpu" v="L4 · 24GB" />
+        <Stat label="gpu" v="H200 · 141GB" />
         <span className="deck-sep" />
         <span className={`deck-mode deck-mode-${mode}`}>{mode === "mock" ? "demo" : "live"}</span>
       </div>
@@ -123,5 +123,5 @@ function fmtTime(s: number): string {
 // crude wall-clock estimate of a full run for the cost projection (loading + steps + eval)
 function estTotalSeconds(plan: RunPlan | null): number {
   const steps = plan?.training.max_steps ?? 150;
-  return 90 + steps * 1.0 + 35; // load + ~1s/step on L4 (0.5B) + eval — rough
+  return 90 + steps * 1.0 + 35; // load + ~1s/step on H200 (2B) + eval — rough
 }

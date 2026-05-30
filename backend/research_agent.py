@@ -14,6 +14,86 @@ from backend.app import api_image, app, hf_secret, openai_secret
 FIXTURES_DIR = Path("/root/fixtures")
 SUBPROCESS_TIMEOUT_SECONDS = 480
 
+# How an exec-command maps to a timeline icon (kind). The frontend's Notebook
+# only knows note | search | peek | decision, so everything collapses to those.
+_PEEK_HINTS = ("load_dataset", "datasets", "peek", "list(row", "row.keys", "head")
+_SEARCH_HINTS = ("list_datasets", "search", "hf_search", "huggingface_hub")
+
+
+def _classify_command(command: str) -> str:
+    low = command.lower()
+    if any(h in low for h in _SEARCH_HINTS):
+        return "search"
+    if any(h in low for h in _PEEK_HINTS):
+        return "peek"
+    return "note"
+
+
+def _coerce_command(value: object) -> str:
+    # Codex reports a command as either a list of argv tokens or a string.
+    if isinstance(value, list):
+        return " ".join(str(v) for v in value)
+    return str(value)
+
+
+def parse_codex_events(stdout: str) -> list[dict]:
+    """Turn ``codex exec --json`` JSONL stdout into transparency-timeline events.
+
+    Defensive by design: Codex's event schema shifts across releases (some emit
+    ``{"msg": {"type": ...}}``, newer ones ``{"type": "item.completed", "item": ...}``),
+    and the task still succeeds even if not one line parses. We extract the
+    human-meaningful beats — reasoning, the agent's messages, and the shell/Python
+    it ran to inspect datasets — and drop the rest. Order is preserved; each event
+    is tagged ``source="research"`` so the UI can show *which* subagent spoke.
+    """
+    events: list[dict] = []
+
+    def add(kind: str, text: str, detail: str | None = None) -> None:
+        text = (text or "").strip()
+        if not text:
+            return
+        events.append(
+            {"ts": None, "source": "research", "kind": kind,
+             "text": text[:600], "step": None,
+             "detail": (detail[:400] if detail else None)},
+        )
+
+    for line in stdout.splitlines():
+        line = line.strip()
+        if not line or not (line.startswith("{") or line.startswith("[")):
+            continue
+        try:
+            obj = json.loads(line)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if not isinstance(obj, dict):
+            continue
+
+        # Unwrap the two known envelope shapes to a single payload + type.
+        payload = obj.get("msg") if isinstance(obj.get("msg"), dict) else obj
+        if isinstance(obj.get("item"), dict):
+            payload = obj["item"]
+        etype = str(payload.get("type") or payload.get("item_type") or obj.get("type") or "")
+
+        if "reason" in etype:
+            add("note", payload.get("text") or payload.get("summary") or "")
+        elif "agent_message" in etype or etype in ("message", "assistant_message"):
+            add("decision", payload.get("message") or payload.get("text") or "")
+        elif "command" in etype or "exec" in etype:
+            # Log the command itself, never its output (keeps the timeline readable).
+            # Old schema: exec_command_begin carries `command`, exec_command_end only
+            # carries output -> the empty-cmd guard drops the latter. New schema: a
+            # single command_execution item carries both -> we take the command.
+            cmd = _coerce_command(payload.get("command") or payload.get("call") or "")
+            if cmd and "end" not in etype:
+                add(_classify_command(cmd), f"ran: {cmd}")
+        elif "tool" in etype:
+            name = payload.get("name") or payload.get("tool") or "tool"
+            add("search", f"called {name}", json.dumps(payload.get("arguments"))[:300]
+                if payload.get("arguments") else None)
+
+    return events
+
 
 def _build_codex_prompt() -> str:
     return """You are an autonomous fine-tuning research agent. You have shell + Python + filesystem access in this working directory.
@@ -39,7 +119,7 @@ def _build_codex_prompt() -> str:
      Do not commit to `input_field` / `output_field` column names you have not printed.
 3. Pick relevant benchmarks (just human-readable labels — v1 does not run them).
 4. Write a tight `prompt_template` using literal `{input}` and `{output}` placeholders.
-5. Set a sane TrainingConfig for a Qwen3.5-2B bf16 LoRA fine-tune on a single L4 GPU.
+5. Set a sane TrainingConfig for a Qwen3.5-2B bf16 LoRA fine-tune on a single H200 GPU.
 
 ## Training guidance (defaults — override only with a reason)
 - `max_steps`: 150 for tiny models; up to 250 only if the task is genuinely complex.
@@ -63,7 +143,12 @@ def research(
     eval_examples: list[dict],
     preferred_model: str | None,
 ) -> dict:
-    """Run the Codex-powered research agent. Returns a validated RunPlan as a dict."""
+    """Run the Codex-powered research agent.
+
+    Returns ``{"plan": <validated RunPlan dict>, "events": [<reasoning trace>]}``.
+    Each event is ``{ts, source, kind, text, step, detail}`` (``source="research"``)
+    so the UI can replay *what the agent did* to choose the dataset and recipe.
+    """
     from shared.catalog import CATALOG
     from shared.schemas import RunPlan
 
@@ -105,36 +190,45 @@ def research(
             json.dumps({"OPENAI_API_KEY": os.environ["OPENAI_API_KEY"]})
         )
 
-        try:
-            proc = subprocess.run(
-                [
-                    "codex",
-                    "exec",
-                    "--cd",
-                    str(scratch),
-                    # Modal container is already our sandbox; nested bubblewrap
-                    # inside Modal fails on kernel-namespace permissions.
-                    "--sandbox",
-                    "danger-full-access",
-                    "--skip-git-repo-check",
-                    prompt,
-                ],
-                cwd=str(scratch),
-                env=env,
-                stdin=subprocess.DEVNULL,
-                capture_output=True,
-                text=True,
-                timeout=SUBPROCESS_TIMEOUT_SECONDS,
-            )
-        except subprocess.TimeoutExpired as e:
-            stdout_tail = (e.stdout or "")[-2000:] if isinstance(e.stdout, str) else ""
-            stderr_tail = (e.stderr or "")[-2000:] if isinstance(e.stderr, str) else ""
-            raise RuntimeError(
-                f"codex exceeded {SUBPROCESS_TIMEOUT_SECONDS}s timeout. "
-                f"stdout_tail={stdout_tail} stderr_tail={stderr_tail}"
-            ) from e
+        def _run_codex(*, json_events: bool) -> subprocess.CompletedProcess[str]:
+            # --json streams structured reasoning/tool events on stdout so we can
+            # surface the agent's thinking; everything else is the proven recipe.
+            # Modal container is already our sandbox; nested bubblewrap inside
+            # Modal fails on kernel-namespace permissions, hence danger-full-access.
+            args = ["codex", "exec"]
+            if json_events:
+                args.append("--json")
+            args += ["--cd", str(scratch), "--sandbox", "danger-full-access",
+                     "--skip-git-repo-check", prompt]
+            try:
+                return subprocess.run(
+                    args,
+                    cwd=str(scratch),
+                    env=env,
+                    stdin=subprocess.DEVNULL,
+                    capture_output=True,
+                    text=True,
+                    timeout=SUBPROCESS_TIMEOUT_SECONDS,
+                )
+            except subprocess.TimeoutExpired as e:
+                stdout_tail = (e.stdout or "")[-2000:] if isinstance(e.stdout, str) else ""
+                stderr_tail = (e.stderr or "")[-2000:] if isinstance(e.stderr, str) else ""
+                raise RuntimeError(
+                    f"codex exceeded {SUBPROCESS_TIMEOUT_SECONDS}s timeout. "
+                    f"stdout_tail={stdout_tail} stderr_tail={stderr_tail}"
+                ) from e
 
         plan_path = scratch / "plan.json"
+        proc = _run_codex(json_events=True)
+        events = parse_codex_events(proc.stdout) if plan_path.exists() else []
+
+        # Safety net: if --json isn't supported on this Codex build the run aborts
+        # before writing plan.json. Retry once on the plain (eventless) path so the
+        # research step never regresses just to gain the reasoning trace.
+        if not plan_path.exists():
+            proc = _run_codex(json_events=False)
+            events = []
+
         if not plan_path.exists():
             raise RuntimeError(
                 f"codex did not write plan.json (exit={proc.returncode}). "
@@ -144,7 +238,10 @@ def research(
         plan_dict = json.loads(plan_path.read_text())
         if preferred_model:
             plan_dict["base_model"] = preferred_model
-        return RunPlan.model_validate(plan_dict).model_dump()
+        return {
+            "plan": RunPlan.model_validate(plan_dict).model_dump(),
+            "events": events,
+        }
 
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
@@ -164,9 +261,14 @@ def smoke_research(
     register on the shared app (which happens during `modal serve`).
     """
     eval_examples = json.loads(eval_examples_json)
-    plan = research.remote(
+    out = research.remote(
         task_description,
         eval_examples,
         preferred_model or None,
     )
-    print(json.dumps(plan, indent=2))
+    events = out.get("events", [])
+    print(f"[research] captured {len(events)} reasoning event(s):")
+    for e in events:
+        print(f"  · {e['kind']:8} {e['text']}")
+    print("\n[research] plan:")
+    print(json.dumps(out.get("plan", out), indent=2))

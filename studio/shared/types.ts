@@ -1,7 +1,7 @@
 // Mirror of backend/shared/schemas.py — the RunPlan spine, shared by client + BFF.
 // Kept framework-free so both the React client and the Elysia server import it.
 
-export type BaseModelName = "Qwen2.5-0.5B-Instruct" | "SmolLM2-1.7B-Instruct";
+export type BaseModelName = "Qwen3.5-2B";
 
 export interface EvalExample {
   input: string;
@@ -117,4 +117,34 @@ export interface SampleEvent {
   step: number;
   prompt: string;
   text: string;
+}
+
+// ---- transparency timeline -------------------------------------------------
+// A single, source-tagged reasoning/status event — the backend writes these to
+// its `run_events` Dict (one per run) and the research agent returns a list of
+// them with the plan. The UI replays them so you can see *which* subagent did
+// *what*, and at which training step.
+//   source: "research" (Codex picking the dataset) | "trainer" | "judge" | "lead"
+//   kind:   "status" | "progress" | "note" | "search" | "peek" | "decision" | "sample"
+export interface RunEvent {
+  ts: number | null;        // seconds since the run/agent started (null if unknown)
+  source: string;
+  kind: string;
+  text: string;
+  step?: number | null;     // training step this event belongs to, when relevant
+  detail?: string | null;
+}
+
+// Shape returned by POST /api/research — the plan plus the agent's reasoning trace.
+export interface ResearchResult {
+  plan: RunPlan;
+  events: RunEvent[];
+}
+
+// Shape returned by GET /api/run/:id/metrics — the polling snapshot the charts read.
+export interface MetricsSnapshot {
+  status: RunStatus | null;
+  metrics: StepMetric[];
+  result: RunResult | null;
+  samples?: SampleEvent[] | null;   // mock-only: mid-training re-samples
 }

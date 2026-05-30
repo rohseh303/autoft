@@ -1,4 +1,4 @@
-import type { RunPlan, RunResult, UserRequest } from "@shared/types";
+import type { ResearchResult, RunPlan, UserRequest } from "@shared/types";
 
 const base = "/api";
 
@@ -6,7 +6,9 @@ export async function health(): Promise<{ ok: boolean; mode: "mock" | "modal" }>
   return (await fetch(`${base}/health`)).json();
 }
 
-export async function research(req: UserRequest): Promise<RunPlan> {
+// Returns the plan plus the agent's reasoning trace ({plan, events}). The mock
+// and Modal backends both speak this shape now.
+export async function research(req: UserRequest): Promise<ResearchResult> {
   const r = await fetch(`${base}/research`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -27,6 +29,9 @@ export async function train(plan: RunPlan, eval_examples: UserRequest["eval_exam
 }
 
 export const streamUrl = (runId: string) => `${base}/run/${runId}/stream`;
+export const metricsUrl = (runId: string) => `${base}/run/${runId}/metrics`;
+export const eventsUrl = (runId: string) => `${base}/run/${runId}/events`;
+export const logsUrl = (runId: string) => `${base}/run/${runId}/logs`;
 
 // POST-based SSE (fetch + ReadableStream) for the research thought-stream.
 // Returns true if the server supports it (mock), false to fall back to /research.

@@ -51,12 +51,14 @@ def web():
 
     @api.post("/research")
     def do_research(req: UserRequest = Body(...)):
-        plan_dict = research.remote(
+        # research() returns {"plan": RunPlan dict, "events": [reasoning trace]}.
+        # The Studio BFF forwards both: the plan drives the PlanCard, the events
+        # render the agent's live reasoning in the research notebook.
+        return research.remote(
             req.task_description,
             [e.model_dump() for e in req.eval_examples],
             req.preferred_model,
         )
-        return plan_dict
 
     class TrainRequest(BaseModel):
         plan: RunPlan

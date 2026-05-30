@@ -156,12 +156,16 @@ def train_run(run_id: str, plan_dict: dict, eval_examples: list[dict]) -> dict:
     start = time.time()
 
     class StreamCallback(TrainerCallback):
+        def __init__(self) -> None:
+            self._milestones_hit: set[int] = set()
+
         def on_log(self, args, state, control, logs=None, **kwargs):
             if logs is None:
                 return
+            step = int(state.global_step)
             metric = StepMetric(
                 run_id=run_id,
-                step=int(state.global_step),
+                step=step,
                 loss=logs.get("loss"),
                 learning_rate=logs.get("learning_rate"),
                 grad_norm=logs.get("grad_norm"),
@@ -170,6 +174,17 @@ def train_run(run_id: str, plan_dict: dict, eval_examples: list[dict]) -> dict:
             )
             metrics_queue.put(metric.model_dump(), partition=run_id)
             run_metrics[run_id] = (run_metrics.get(run_id) or []) + [metric.model_dump()]
+
+            # Drop a reasoning beat onto the transparency timeline at ~quartiles so
+            # the UI shows training progress "at what STEP" without one event/step.
+            total = int(getattr(args, "max_steps", 0)) or step
+            for frac in (0.0, 0.25, 0.5, 0.75):
+                mark = 1 if frac == 0.0 else max(1, int(total * frac))
+                if step >= mark and mark not in self._milestones_hit:
+                    self._milestones_hit.add(mark)
+                    loss = logs.get("loss")
+                    suffix = f" · loss {loss:.4f}" if loss is not None else ""
+                    _emit("trainer", "progress", f"step {step}/{total}{suffix}", step=step)
 
     push_status("training", "Trainer running...")
 

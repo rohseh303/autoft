@@ -2,7 +2,10 @@
 // secrets. Synthesizes a believable research trace, a RunPlan, a training loss
 // curve, live model re-samples (gibberish -> coherent), and a before/after.
 // This is what makes the project demoable on a laptop in one command.
-import type { Measure, RunPlan, RunResult, Scorecard, UserRequest } from "../shared/types";
+import type {
+  Measure, RunEvent, RunPlan, RunResult, RunStatus, RunState,
+  SampleEvent, Scorecard, StepMetric, UserRequest,
+} from "../shared/types";
 
 // --- a tiny catalog echo so the mock plan looks plausible per task ----------
 const CATALOG: { tags: string[]; ds: string; cfg: string | null; inp: string; out: string; note: string }[] = [
@@ -23,7 +26,7 @@ export function mockPlan(req: UserRequest): RunPlan {
   const c = pick(req.task_description);
   return {
     task_summary: req.task_description.trim().replace(/\.$/, "") || "Fine-tune a small model",
-    base_model: req.preferred_model ?? "Qwen2.5-0.5B-Instruct",
+    base_model: req.preferred_model ?? "Qwen3.5-2B",
     hf_dataset: c.ds,
     dataset_config: c.cfg,
     dataset_split: "train[:2000]",
@@ -38,8 +41,8 @@ export function mockPlan(req: UserRequest): RunPlan {
     },
     reasoning:
       `Matched your task to ${c.ds} — ${c.note}. The ${c.inp} → ${c.out} column mapping is clean ` +
-      `and instruction-style formatting works well for a small model. 150 LoRA steps on an L4 is enough ` +
-      `to imprint the style without overfitting a 0.5B model.`,
+      `and instruction-style formatting works well for a small model. 150 LoRA steps on an H200 is enough ` +
+      `to imprint the style without overfitting a 2B model.`,
   };
 }
 
@@ -156,3 +159,117 @@ export function mockResult(runId: string, plan: RunPlan, req: UserRequest): RunR
 }
 
 export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+// ============================================================================
+// Live-run simulation — polling-friendly.
+//
+// Real mode polls Modal's /run/:id/metrics + /events (cumulative snapshots) and
+// streams /run/:id/logs. Mock mirrors that exact contract so the Studio runs
+// end-to-end with no Modal: every snapshot below is a PURE function of elapsed
+// seconds, so repeated polls are consistent and the run "advances" on wall-clock.
+// ============================================================================
+
+// Compressed wall-clock so a full mock run finishes in ~15s (watchable demo).
+const SIM = { loadingS: 3, stepS: 0.06, evalS: 2.4 };
+
+function simPhase(plan: RunPlan, elapsedS: number): { state: RunState; message: string; step: number; done: boolean } {
+  const max = plan.training.max_steps;
+  const trainEnd = SIM.loadingS + max * SIM.stepS;
+  const evalEnd = trainEnd + SIM.evalS;
+  if (elapsedS < SIM.loadingS) {
+    const msgs = ["pulling image", `downloading ${plan.base_model}`, `loading ${plan.hf_dataset}`, "tokenizing 2000 rows"];
+    const i = Math.min(msgs.length - 1, Math.floor((elapsedS / SIM.loadingS) * msgs.length));
+    return { state: "loading", message: msgs[i]!, step: 0, done: false };
+  }
+  if (elapsedS < trainEnd) {
+    const step = Math.max(1, Math.min(max, Math.floor((elapsedS - SIM.loadingS) / SIM.stepS)));
+    return { state: "training", message: "Trainer running…", step, done: false };
+  }
+  if (elapsedS < evalEnd) return { state: "evaluating", message: "generating base vs fine-tuned", step: max, done: false };
+  return { state: "done", message: `final_loss=${lossAt(max, max).toFixed(4)}`, step: max, done: true };
+}
+
+// Cumulative metrics snapshot — same shape as Modal's /run/:id/metrics, plus a
+// mock-only `samples` array (the live re-sample showpiece, which real mode lacks).
+export function simulateMetrics(
+  runId: string, plan: RunPlan, req: UserRequest, elapsedS: number,
+): { status: RunStatus; metrics: StepMetric[]; result: RunResult | null; samples: SampleEvent[] } {
+  const { state, message, step } = simPhase(plan, elapsedS);
+  const max = plan.training.max_steps;
+  const metrics: StepMetric[] = [];
+  const samples: SampleEvent[] = [];
+  const prompt = req.eval_examples[0]?.input ?? "eval prompt";
+  for (let s = 1; s <= step; s++) {
+    metrics.push({
+      run_id: runId, step: s,
+      loss: lossAt(s, max), learning_rate: lrAt(s, plan), grad_norm: gradAt(s),
+      epoch: (s * plan.training.batch_size * plan.training.gradient_accumulation_steps) / 2000,
+      elapsed_seconds: SIM.loadingS + s * SIM.stepS,
+    });
+    if (s === 1 || s % 12 === 0 || s === max) samples.push({ run_id: runId, step: s, prompt, text: sampleAt(s, max) });
+  }
+  return {
+    status: { run_id: runId, state, message, plan },
+    metrics,
+    result: state === "done" ? mockResult(runId, plan, req) : null,
+    samples,
+  };
+}
+
+// Cumulative transparency timeline — mirrors what the trainer writes to Modal's
+// run_events Dict, and adds a couple of judge beats so the demo shows the
+// multi-source ("which subagent") view. Research events come from /api/research.
+export function simulateEvents(runId: string, plan: RunPlan, elapsedS: number): RunEvent[] {
+  const { state, step, done } = simPhase(plan, elapsedS);
+  const max = plan.training.max_steps;
+  const trainStart = SIM.loadingS, trainEnd = SIM.loadingS + max * SIM.stepS;
+  const evs: RunEvent[] = [];
+  const push = (ts: number, source: string, kind: string, text: string, st: number | null = null) =>
+    evs.push({ ts: +ts.toFixed(2), source, kind, text, step: st, detail: null });
+
+  push(0.0, "trainer", "status", `Loading ${plan.base_model}…`);
+  if (elapsedS >= SIM.loadingS * 0.5) push(SIM.loadingS * 0.5, "trainer", "status", `Loading dataset ${plan.hf_dataset}…`);
+  if (state !== "loading") push(trainStart, "trainer", "status", "Trainer running…");
+  for (const frac of [0, 0.25, 0.5, 0.75]) {
+    const mark = frac === 0 ? 1 : Math.max(1, Math.floor(max * frac));
+    if (step >= mark) push(trainStart + mark * SIM.stepS, "trainer", "progress", `step ${Math.min(step, max)}/${max} · loss ${lossAt(mark, max).toFixed(4)}`, mark);
+  }
+  if (state === "evaluating" || done) push(trainEnd, "trainer", "status", "Generating base vs fine-tuned outputs…");
+  if (done) {
+    push(trainEnd + 0.3, "judge", "note", "Scoring fine-tuned vs base outputs (gpt-5.4-mini, elementwise)");
+    push(trainEnd + SIM.evalS * 0.8, "judge", "decision", "Judge preferred the fine-tuned model on most eval examples");
+    push(trainEnd + SIM.evalS, "trainer", "status", `done · final_loss=${lossAt(max, max).toFixed(4)}`, max);
+  }
+  return evs;
+}
+
+// Synthesized container log lines for the streamed /logs pane. Returns lines in
+// emit order; the BFF paces them out over the run so they feel live.
+export function mockLogLines(plan: RunPlan, req: UserRequest): string[] {
+  const max = plan.training.max_steps;
+  const lines: string[] = [
+    "Building image autoft (cached layers)…",
+    "✓ image built",
+    `Loading ${plan.base_model} via Unsloth (bf16 LoRA)…`,
+    "==((====))==  Unsloth 2026.5.8: Fast Qwen3.5 patching. Transformers: 5.5.0.",
+    `   \\\\   /|    GPU: NVIDIA H200. Max memory: 141.0 GB. Platform: Linux.`,
+    `O^O/ \\_/ \\    Bfloat16 = TRUE. Free Apache license.`,
+    `[autoft] loading dataset ${plan.hf_dataset} (${plan.dataset_split})`,
+    `[autoft] pre-tokenized 2000 examples; columns=['input_ids', 'attention_mask']`,
+    `[autoft] tokenizer.eos_token='<|endoftext|>' pad_token='<|endoftext|>'`,
+    "Trainer running… (linear LR, adamw_8bit)",
+  ];
+  for (let s = 1; s <= max; s++) {
+    if (s === 1 || s % 10 === 0 || s === max) {
+      lines.push(`{'loss': ${lossAt(s, max).toFixed(4)}, 'grad_norm': ${gradAt(s).toFixed(3)}, 'learning_rate': ${lrAt(s, plan).toExponential(2)}, 'epoch': ${((s * plan.training.batch_size * plan.training.gradient_accumulation_steps) / 2000).toFixed(2)}}`);
+    }
+  }
+  lines.push(
+    `{'train_runtime': ${(max * SIM.stepS).toFixed(1)}, 'train_loss': ${lossAt(max, max).toFixed(4)}}`,
+    "[autoft] computing held-out eval loss…",
+    "[autoft] generating base vs fine-tuned outputs…",
+    "[autoft] saved LoRA adapter; committed volume",
+    "✓ run complete",
+  );
+  return lines;
+}
