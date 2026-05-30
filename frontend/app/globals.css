@@ -1,0 +1,19 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+html, body {
+  background: #050913;
+  color: #e2e8f0;
+  font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", sans-serif;
+}
+
+.glass {
+  background: linear-gradient(180deg, rgba(15,23,42,0.7), rgba(2,6,23,0.7));
+  backdrop-filter: blur(14px);
+  border: 1px solid rgba(148,163,184,0.12);
+}

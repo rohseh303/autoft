@@ -1,0 +1,23 @@
+{
+  "task_summary": "Summarize US Congressional bills into concise plain-English summaries.",
+  "base_model": "Qwen2.5-0.5B-Instruct",
+  "hf_dataset": "billsum",
+  "dataset_config": null,
+  "dataset_split": "train[:2000]",
+  "input_field": "text",
+  "output_field": "summary",
+  "prompt_template": "### Instruction:\nSummarize the following Congressional bill in plain English:\n\n{input}\n\n### Response:\n{output}",
+  "benchmarks": ["billsum-rouge"],
+  "training": {
+    "max_steps": 150,
+    "learning_rate": 0.0002,
+    "batch_size": 2,
+    "gradient_accumulation_steps": 4,
+    "lora_r": 16,
+    "lora_alpha": 16,
+    "max_seq_length": 2048,
+    "warmup_steps": 10,
+    "seed": 42
+  },
+  "reasoning": "BillSum is the canonical dataset for legislative summarization with human-written summaries — ROUGE on this is the established benchmark. The text/summary column mapping is clean and instruction-style format works well for small models."
+}

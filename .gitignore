@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+.env.local
+node_modules/
+frontend/.next/
+frontend/out/
+frontend/build/
+*.log
+.DS_Store
+.modal/
+checkpoints/

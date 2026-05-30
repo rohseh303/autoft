@@ -1,0 +1,16 @@
+[project]
+name = "autoft"
+version = "0.1.0"
+description = "Autonomous fine-tuning platform — research agent picks dataset, Modal trains, dashboard streams metrics"
+requires-python = ">=3.11"
+dependencies = [
+    "modal>=0.66.0",
+    "pydantic>=2.0",
+    "openai>=1.50.0",
+    "huggingface_hub>=0.24.0",
+    "requests>=2.31.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["backend*", "shared*"]
