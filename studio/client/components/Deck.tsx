@@ -123,5 +123,5 @@ function fmtTime(s: number): string {
 // crude wall-clock estimate of a full run for the cost projection (loading + steps + eval)
 function estTotalSeconds(plan: RunPlan | null): number {
   const steps = plan?.training.max_steps ?? 150;
-  return 90 + steps * 1.0 + 35; // load + ~1s/step on L4 (0.5B) + eval — rough
+  return 90 + steps * 1.0 + 35; // load + ~1s/step on L4 (2B) + eval — rough
 }

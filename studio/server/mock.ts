@@ -23,7 +23,7 @@ export function mockPlan(req: UserRequest): RunPlan {
   const c = pick(req.task_description);
   return {
     task_summary: req.task_description.trim().replace(/\.$/, "") || "Fine-tune a small model",
-    base_model: req.preferred_model ?? "Qwen2.5-0.5B-Instruct",
+    base_model: req.preferred_model ?? "Qwen3.5-2B",
     hf_dataset: c.ds,
     dataset_config: c.cfg,
     dataset_split: "train[:2000]",
@@ -33,13 +33,13 @@ export function mockPlan(req: UserRequest): RunPlan {
     benchmarks: [`${c.ds.split("/").pop()}-rouge`, "exact-match"],
     training: {
       max_steps: 150, learning_rate: 2e-4, batch_size: 2,
-      gradient_accumulation_steps: 4, lora_r: 16, lora_alpha: 16,
+      gradient_accumulation_steps: 8, lora_r: 16, lora_alpha: 32,
       max_seq_length: 2048, warmup_steps: 10, seed: 42,
     },
     reasoning:
       `Matched your task to ${c.ds} — ${c.note}. The ${c.inp} → ${c.out} column mapping is clean ` +
       `and instruction-style formatting works well for a small model. 150 LoRA steps on an L4 is enough ` +
-      `to imprint the style without overfitting a 0.5B model.`,
+      `to imprint the style without overfitting a 2B model.`,
   };
 }
 
@@ -139,10 +139,15 @@ export function mockResult(runId: string, plan: RunPlan, req: UserRequest): RunR
   const examples = req.eval_examples.length
     ? req.eval_examples
     : [{ input: "A bill to require the Secretary of Health to publish guidelines on AI in clinical decision-making by 2027.", expected_output: null }];
+  const finalLoss = lossAt(plan.training.max_steps, plan.training.max_steps);
+  const judge = 8.4;
   return {
     run_id: runId,
     plan,
-    final_loss: lossAt(plan.training.max_steps, plan.training.max_steps),
+    final_loss: finalLoss,
+    eval_loss: finalLoss + 0.12,
+    judge_score: judge,
+    objective: judge, // judge is primary objective per merged backend
     comparisons: examples.map((ex) => ({
       input: ex.input,
       base_output:
@@ -150,6 +155,8 @@ export function mockResult(runId: string, plan: RunPlan, req: UserRequest): RunR
       finetuned_output:
         "Requires HHS to publish AI clinical-decision guidelines by 2027.",
       expected_output: ex.expected_output ?? null,
+      judge_score: judge,
+      judge_critique: "Tighten to a single sentence and lead with the required action.",
     })),
     scorecard: mockScorecard(plan),
   };

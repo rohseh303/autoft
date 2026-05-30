@@ -1,7 +1,8 @@
 // Mirror of backend/shared/schemas.py — the RunPlan spine, shared by client + BFF.
 // Kept framework-free so both the React client and the Elysia server import it.
 
-export type BaseModelName = "Qwen2.5-0.5B-Instruct" | "SmolLM2-1.7B-Instruct";
+// Merged backend (shared/schemas.py) now ships a single base model.
+export type BaseModelName = "Qwen3.5-2B";
 
 export interface EvalExample {
   input: string;
@@ -70,14 +71,19 @@ export interface EvalComparison {
   base_output: string;
   finetuned_output: string;
   expected_output?: string | null;
+  judge_score?: number | null;     // 0-10, the LLM judge's score for this output
+  judge_critique?: string | null;  // one-line "what to improve next"
 }
 
 export interface RunResult {
   run_id: string;
   plan: RunPlan;
-  final_loss: number | null;
+  final_loss: number | null;       // training loss
+  eval_loss?: number | null;       // held-out loss (generalization signal)
+  judge_score?: number | null;     // mean LLM-judge score across eval examples, 0-10
+  objective?: number | null;       // the scalar the post-training lead maximizes
   comparisons: EvalComparison[];
-  scorecard?: Scorecard | null;
+  scorecard?: Scorecard | null;    // UI-only rollup synthesized from the above
 }
 
 // How the model actually performed — a blind-preference verdict + a few
