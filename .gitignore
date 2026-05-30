@@ -13,3 +13,4 @@ frontend/build/
 .DS_Store
 .modal/
 checkpoints/
+*.tsbuildinfo

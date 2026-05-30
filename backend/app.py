@@ -20,26 +20,21 @@ api_image = (
     .add_local_python_source("shared", "backend")
 )
 
-# Image for training (heavy GPU stack). Unsloth installs torch + xformers compatible builds.
+# Image for training. Pip pins removed — let Unsloth resolve its own compatible
+# transformers/trl/peft/torch versions to avoid 2024.12.x-vs-zoo drift.
 train_image = (
     modal.Image.debian_slim(python_version="3.11")
     .apt_install("git")
     .pip_install(
-        "torch==2.4.0",
         "pydantic>=2.0",
         "huggingface_hub>=0.24.0",
-        "transformers==4.46.3",
-        "datasets>=2.20.0",
-        "accelerate>=0.34.0",
-        "peft>=0.13.0",
-        "trl==0.12.2",
-        "bitsandbytes>=0.44.0",
         "sentencepiece",
         "protobuf",
+        "bitsandbytes",
     )
     .pip_install(
-        "unsloth==2024.12.4",
-        "unsloth_zoo==2024.12.3",
+        "unsloth",
+        "unsloth_zoo",
     )
     .add_local_python_source("shared", "backend")
 )

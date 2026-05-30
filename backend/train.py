@@ -30,14 +30,20 @@ from backend.app import (
 def train_run(run_id: str, plan_dict: dict, eval_examples: list[dict]) -> dict:
     """Run an SFT training job. Pushes metrics to `metrics_queue` partitioned by run_id."""
     # Imports inside the function so they only resolve in the train image.
+    import datasets as _datasets
+    _datasets.disable_caching()
     from datasets import load_dataset
-    from transformers import TrainerCallback
-    from trl import SFTConfig, SFTTrainer
+    from transformers import (
+        DataCollatorForLanguageModeling,
+        Trainer,
+        TrainerCallback,
+        TrainingArguments,
+    )
     from unsloth import FastLanguageModel
+
 
     from shared.schemas import (
         MODEL_REGISTRY,
-        EvalComparison,
         RunPlan,
         RunResult,
         RunStatus,
@@ -106,6 +112,15 @@ def train_run(run_id: str, plan_dict: dict, eval_examples: list[dict]) -> dict:
     columns_to_drop = [c for c in ds.column_names if c != "text"]
     ds = ds.map(_format_row, remove_columns=columns_to_drop)
 
+    max_len = plan.training.max_seq_length
+
+    def _tokenize_batch(batch):
+        enc = tokenizer(batch["text"], truncation=True, max_length=max_len, padding=False)
+        return enc
+
+    ds = ds.map(_tokenize_batch, batched=True, remove_columns=["text"])
+    print(f"[autoft] pre-tokenized {len(ds)} examples; columns={ds.column_names}")
+
     # Streaming callback ---------------------------------------------------
     start = time.time()
 
@@ -129,30 +144,38 @@ def train_run(run_id: str, plan_dict: dict, eval_examples: list[dict]) -> dict:
     output_dir = f"{MODELS_DIR}/runs/{run_id}"
     Path(output_dir).mkdir(parents=True, exist_ok=True)
 
-    trainer = SFTTrainer(
+    if tokenizer.eos_token is None:
+        tokenizer.eos_token = "<|endoftext|>"
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    print(f"[autoft] tokenizer.eos_token={tokenizer.eos_token!r} pad_token={tokenizer.pad_token!r}")
+
+    training_args = TrainingArguments(
+        per_device_train_batch_size=plan.training.batch_size,
+        gradient_accumulation_steps=plan.training.gradient_accumulation_steps,
+        warmup_steps=plan.training.warmup_steps,
+        max_steps=plan.training.max_steps,
+        learning_rate=plan.training.learning_rate,
+        fp16=False,
+        bf16=True,
+        logging_steps=1,
+        optim="adamw_8bit",
+        weight_decay=0.01,
+        lr_scheduler_type="linear",
+        seed=plan.training.seed,
+        output_dir=output_dir,
+        report_to="none",
+        save_strategy="no",
+        dataloader_num_workers=0,
+        dataloader_persistent_workers=False,
+        remove_unused_columns=False,
+    )
+
+    trainer = Trainer(
         model=model,
-        tokenizer=tokenizer,
+        args=training_args,
         train_dataset=ds,
-        dataset_text_field="text",
-        max_seq_length=plan.training.max_seq_length,
-        args=SFTConfig(
-            per_device_train_batch_size=plan.training.batch_size,
-            gradient_accumulation_steps=plan.training.gradient_accumulation_steps,
-            warmup_steps=plan.training.warmup_steps,
-            max_steps=plan.training.max_steps,
-            learning_rate=plan.training.learning_rate,
-            fp16=False,
-            bf16=True,
-            logging_steps=1,
-            optim="adamw_8bit",
-            weight_decay=0.01,
-            lr_scheduler_type="linear",
-            seed=plan.training.seed,
-            output_dir=output_dir,
-            report_to="none",
-            save_strategy="no",
-            dataset_num_proc=1,
-        ),
+        data_collator=DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False),
         callbacks=[StreamCallback()],
     )
 
@@ -232,15 +255,15 @@ def smoke():
     import uuid
 
     plan = {
-        "task_summary": "Summarize US Congressional bills concisely.",
+        "task_summary": "Follow instructions in the style of Alpaca.",
         "base_model": "Qwen2.5-0.5B-Instruct",
-        "hf_dataset": "billsum",
+        "hf_dataset": "yahma/alpaca-cleaned",
         "dataset_config": None,
         "dataset_split": "train[:500]",
-        "input_field": "text",
-        "output_field": "summary",
-        "prompt_template": "### Instruction:\nSummarize the following bill:\n\n{input}\n\n### Response:\n{output}",
-        "benchmarks": ["billsum-rouge"],
+        "input_field": "instruction",
+        "output_field": "output",
+        "prompt_template": "### Instruction:\n{input}\n\n### Response:\n{output}",
+        "benchmarks": ["alpaca-eval"],
         "training": {
             "max_steps": 30,
             "learning_rate": 2e-4,
@@ -255,7 +278,7 @@ def smoke():
         "reasoning": "smoke",
     }
     eval_examples = [
-        {"input": "A bill to require the Secretary of Health to publish guidelines on AI in clinical decision-making by 2027.", "expected_output": None},
+        {"input": "Write a haiku about an autonomous fine-tuning system.", "expected_output": None},
     ]
     run_id = f"smoke-{uuid.uuid4().hex[:8]}"
     out = train_run.remote(run_id, plan, eval_examples)

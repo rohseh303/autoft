@@ -3,7 +3,7 @@
 CATALOG: list[dict] = [
     {
         "task_tags": ["summarization", "legal", "contracts", "documents"],
-        "hf_dataset": "billsum",
+        "hf_dataset": "FiscalNote/billsum",
         "dataset_config": None,
         "dataset_split": "train[:2000]",
         "input_field": "text",
@@ -12,7 +12,7 @@ CATALOG: list[dict] = [
     },
     {
         "task_tags": ["summarization", "news", "articles"],
-        "hf_dataset": "cnn_dailymail",
+        "hf_dataset": "abisee/cnn_dailymail",
         "dataset_config": "3.0.0",
         "dataset_split": "train[:2000]",
         "input_field": "article",
@@ -21,7 +21,7 @@ CATALOG: list[dict] = [
     },
     {
         "task_tags": ["summarization", "dialogue", "chat", "conversation"],
-        "hf_dataset": "samsum",
+        "hf_dataset": "Samsung/samsum",
         "dataset_config": None,
         "dataset_split": "train[:2000]",
         "input_field": "dialogue",
@@ -48,7 +48,7 @@ CATALOG: list[dict] = [
     },
     {
         "task_tags": ["math", "reasoning", "arithmetic", "word-problems"],
-        "hf_dataset": "gsm8k",
+        "hf_dataset": "openai/gsm8k",
         "dataset_config": "main",
         "dataset_split": "train[:2000]",
         "input_field": "question",
@@ -66,7 +66,7 @@ CATALOG: list[dict] = [
     },
     {
         "task_tags": ["question-answering", "qa", "reading-comprehension"],
-        "hf_dataset": "squad",
+        "hf_dataset": "rajpurkar/squad",
         "dataset_config": None,
         "dataset_split": "train[:2000]",
         "input_field": "question",
