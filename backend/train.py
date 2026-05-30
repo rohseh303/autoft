@@ -34,10 +34,13 @@ from backend.judge import judge_outputs  # noqa: E402
 def train_run(run_id: str, plan_dict: dict, eval_examples: list[dict]) -> dict:
     """Run an SFT training job. Pushes metrics to `metrics_queue` partitioned by run_id."""
     # Imports inside the function so they only resolve in the train image.
+    # Unsloth MUST be imported before trl/transformers/peft so its patches apply
+    # (otherwise its SFTTrainer eos-token handling doesn't take and trl rejects it).
+    from unsloth import FastLanguageModel
+
     from datasets import load_dataset
     from transformers import TrainerCallback
     from trl import SFTConfig, SFTTrainer
-    from unsloth import FastLanguageModel
 
     from shared.schemas import (
         MODEL_REGISTRY,
@@ -62,7 +65,11 @@ def train_run(run_id: str, plan_dict: dict, eval_examples: list[dict]) -> dict:
         model_name=hf_id,
         max_seq_length=plan.training.max_seq_length,
         dtype=None,
-        load_in_4bit=True,
+        # Qwen3.5: QLoRA (4-bit) is NOT recommended (large quantization error per
+        # Unsloth's Qwen3.5 guide); use bf16/16-bit LoRA instead. ~5GB for 2B.
+        load_in_4bit=False,
+        load_in_16bit=True,
+        full_finetuning=False,
         cache_dir=f"{MODELS_DIR}/hf_cache",
     )
 
@@ -76,7 +83,10 @@ def train_run(run_id: str, plan_dict: dict, eval_examples: list[dict]) -> dict:
         lora_alpha=plan.training.lora_alpha,
         lora_dropout=0,
         bias="none",
-        use_gradient_checkpointing="unsloth",
+        # No checkpointing/offload: a 2B bf16 model (~5GB) fits easily on these
+        # GPUs, so the "unsloth" offload (meant for long-context/low-VRAM) just
+        # slows us down. Flip back to "unsloth" only for big models / long ctx.
+        use_gradient_checkpointing=False,
         random_state=plan.training.seed,
         max_seq_length=plan.training.max_seq_length,
     )
@@ -143,14 +153,17 @@ def train_run(run_id: str, plan_dict: dict, eval_examples: list[dict]) -> dict:
 
     trainer = SFTTrainer(
         model=model,
-        tokenizer=tokenizer,
+        processing_class=tokenizer,  # trl/transformers renamed `tokenizer` to this
         train_dataset=ds,
         eval_dataset=eval_ds,
         args=SFTConfig(
-            # dataset_text_field/max_seq_length live on SFTConfig in modern trl
-            # (they were removed as SFTTrainer kwargs); accepted by old trl too.
+            # In modern trl these live on SFTConfig (not SFTTrainer), and
+            # max_seq_length was renamed to max_length.
             dataset_text_field="text",
-            max_seq_length=plan.training.max_seq_length,
+            max_length=plan.training.max_seq_length,
+            # modern trl validates SFTConfig.eos_token against the vocab and
+            # defaults to a literal placeholder; use the tokenizer's real one.
+            eos_token=tokenizer.eos_token,
             per_device_train_batch_size=plan.training.batch_size,
             per_device_eval_batch_size=plan.training.batch_size,
             gradient_accumulation_steps=plan.training.gradient_accumulation_steps,
@@ -263,7 +276,7 @@ def smoke():
 
     plan = {
         "task_summary": "Summarize US Congressional bills concisely.",
-        "base_model": "Qwen2.5-0.5B-Instruct",
+        "base_model": "Qwen3.5-2B",
         "hf_dataset": "FiscalNote/billsum",
         "dataset_config": None,
         "dataset_split": "train[:500]",

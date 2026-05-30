@@ -1,6 +1,6 @@
 // Mirror of shared/schemas.py — keep in sync.
 
-export type BaseModelName = "Qwen2.5-0.5B-Instruct" | "SmolLM2-1.7B-Instruct";
+export type BaseModelName = "Qwen3.5-2B";
 
 export interface EvalExample {
   input: string;

@@ -51,7 +51,10 @@ def web():
 
     @api.post("/research")
     def do_research(req: UserRequest):
-        plan_dict = research.remote(
+        # research_agent now runs the Codex CLI locally (no .remote, no OpenAI
+        # key). The deployed Modal container has no `codex`, so in practice run
+        # research via the local CLI: `uv run python backend/research_agent.py`.
+        plan_dict = research(
             req.task_description,
             [e.model_dump() for e in req.eval_examples],
             req.preferred_model,

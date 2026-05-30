@@ -27,22 +27,16 @@ train_image = (
     modal.Image.debian_slim(python_version="3.11")
     .apt_install("git")
     .pip_install(
-        # Unpinned: let pip resolve a current, self-consistent stack around the
-        # latest unsloth. The old Dec-2024 pins broke (unsloth_zoo lacked
-        # merge_and_overwrite_lora); unsloth now drives compatible torch/trl/etc.
-        "unsloth",
-        "unsloth_zoo",
-        "torch",
-        "transformers",
-        "datasets",
-        "accelerate",
-        "peft",
-        "trl",
-        "bitsandbytes",
-        "sentencepiece",
-        "protobuf",
-        "pydantic>=2.0",
-        "huggingface_hub",
+        # Qwen3.5 needs unsloth 2026.5.8 + transformers 5. Pin unsloth EXACTLY so
+        # pip can't silently backtrack it: explicit/unpinned leaf deps on the
+        # Modal mirror pull versions newer than unsloth's caps (e.g. datasets
+        # 4.8.5, torch 2.12) and force a backtrack to an old unsloth that ships
+        # transformers 4.57 -> 'KeyError: qwen3_5'. unsloth==2026.5.8 pulls a
+        # compatible stack itself (transformers 5.5 / trl 0.24 / peft / datasets /
+        # bitsandbytes / pydantic); torch<2.11 is the one constraint it needs
+        # (the mirror otherwise defaults to torch 2.12, which it forbids).
+        "unsloth==2026.5.8",
+        "torch<2.11",
     )
     .add_local_python_source("shared", "backend")
 )

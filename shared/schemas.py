@@ -5,11 +5,10 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-BaseModelName = Literal["Qwen2.5-0.5B-Instruct", "SmolLM2-1.7B-Instruct"]
+BaseModelName = Literal["Qwen3.5-2B"]
 
 MODEL_REGISTRY: dict[str, str] = {
-    "Qwen2.5-0.5B-Instruct": "unsloth/Qwen2.5-0.5B-Instruct",
-    "SmolLM2-1.7B-Instruct": "unsloth/SmolLM2-1.7B-Instruct",
+    "Qwen3.5-2B": "unsloth/Qwen3.5-2B",
 }
 
 
@@ -22,9 +21,9 @@ class TrainingConfig(BaseModel):
     max_steps: int = Field(default=150, ge=10, le=2000)
     learning_rate: float = Field(default=2e-4, gt=0)
     batch_size: int = Field(default=2, ge=1, le=16)
-    gradient_accumulation_steps: int = Field(default=4, ge=1, le=32)
+    gradient_accumulation_steps: int = Field(default=8, ge=1, le=32)  # eff. batch 2*8=16
     lora_r: int = Field(default=16, ge=4, le=128)
-    lora_alpha: int = Field(default=16, ge=4, le=128)
+    lora_alpha: int = Field(default=32, ge=4, le=128)  # 2*r per Unsloth LoRA guide
     max_seq_length: int = Field(default=2048, ge=256, le=8192)
     warmup_steps: int = Field(default=10, ge=0)
     seed: int = 42
@@ -34,7 +33,7 @@ class RunPlan(BaseModel):
     """Everything the agent decides; everything training consumes."""
 
     task_summary: str
-    base_model: BaseModelName = "Qwen2.5-0.5B-Instruct"
+    base_model: BaseModelName = "Qwen3.5-2B"
     hf_dataset: str
     dataset_config: str | None = None
     dataset_split: str = "train[:2000]"
