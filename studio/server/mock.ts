@@ -232,7 +232,7 @@ export function simulateEvents(runId: string, plan: RunPlan, elapsedS: number): 
   if (state !== "loading") push(trainStart, "trainer", "status", "Trainer running…");
   for (const frac of [0, 0.25, 0.5, 0.75]) {
     const mark = frac === 0 ? 1 : Math.max(1, Math.floor(max * frac));
-    if (step >= mark) push(trainStart + mark * SIM.stepS, "trainer", "progress", `step ${Math.min(step, max)}/${max} · loss ${lossAt(mark, max).toFixed(4)}`, mark);
+    if (step >= mark) push(trainStart + mark * SIM.stepS, "trainer", "progress", `step ${mark}/${max} · loss ${lossAt(mark, max).toFixed(4)}`, mark);
   }
   if (state === "evaluating" || done) push(trainEnd, "trainer", "status", "Generating base vs fine-tuned outputs…");
   if (done) {
