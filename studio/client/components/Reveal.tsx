@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
-import type { Measure, RunPlan, RunResult, Scorecard } from "@shared/types";
+import type { Measure, RunPlan, RunResult } from "@shared/types";
 import type { LossPoint } from "../lib/useRunStream";
+import { downloadUrl } from "../lib/api";
 
 // The payoff — drag-to-reveal before/after on the user's own examples. Back to
 // the light skin: the win should feel like daylight after the dark theater.
@@ -11,46 +12,132 @@ export function Reveal({ result, points, onReset }: { result: RunResult; points:
         <span className="kicker">done · final loss {result.final_loss?.toFixed(4) ?? "—"}</span>
         <h2>Your model vs. the base model</h2>
         <p className="rv-sub">Drag the divider. Left is the stock model; right is the one you just trained.</p>
-        <button className="rv-again" onClick={onReset}>Train another →</button>
+        <div className="rv-actions">
+          <a className="rv-export" href={downloadUrl(result.run_id)} download>
+            ↓ Export model <span className="rv-export-sub">LoRA adapter ·.zip</span>
+          </a>
+          <button className="rv-again" onClick={onReset}>Train another →</button>
+        </div>
       </div>
+<<<<<<< Updated upstream
       {result.comparisons.map((c, i) => (
         <Compare key={i} input={c.input} base={c.base_output} ft={c.finetuned_output} expected={c.expected_output} />
       ))}
 
       {result.scorecard && <ScoreCard s={result.scorecard} />}
+=======
+      {result.comparisons.length > 0 ? (
+        result.comparisons.map((c, i) => (
+          <Compare
+            key={i}
+            input={c.input}
+            base={c.base_output}
+            ft={c.finetuned_output}
+            expected={c.expected_output}
+            judgeScore={c.judge_score}
+            critique={c.judge_critique}
+          />
+        ))
+      ) : (
+        <div className="cmp-empty card-hard">
+          No test prompt was given, so there's no before/after to show. Add one on the
+          plan screen next time to see your model side-by-side with the base.
+        </div>
+      )}
+
+      <ScoreCard result={result} />
+>>>>>>> Stashed changes
 
       <TechCard plan={result.plan} points={points} finalLoss={result.final_loss} />
     </div>
   );
 }
 
+<<<<<<< Updated upstream
 // The evidence — a blind-preference verdict + soft base-vs-yours measures.
 // Warm and editorial on purpose: a report card, not a dashboard.
 function ScoreCard({ s }: { s: Scorecard }) {
+=======
+function verdictFor(judge: number): string {
+  return judge >= 9 ? "The judge rated your model excellent."
+    : judge >= 7 ? "The judge clearly preferred your model."
+    : judge >= 5 ? "The judge found your model solid but improvable."
+    : "The judge sees room to grow — try more steps or a cleaner dataset.";
+}
+
+// The evidence. Works for BOTH paths:
+//  - mock/sim: uses the synthesized scorecard (verdict, pips, fabricated measures)
+//  - real Modal: derives verdict + pips from the real LLM-judge score, shows
+//    judge/eval_loss/train_loss/objective stats, never fabricates measure bars.
+function ScoreCard({ result }: { result: RunResult }) {
+  const mock = result.scorecard ?? null;
+  const judge = result.judge_score ?? null;
+
+  if (!mock && judge == null && result.eval_loss == null) return null;
+
+  const total = mock?.judge_total ?? 10;
+  const wins = mock ? mock.judge_wins : judge != null ? Math.round(judge) : null;
+  const verdict = mock?.verdict ?? (judge != null ? verdictFor(judge) : "Training complete.");
+  const simulated = mock?.simulated ?? false;
+
+  const stats: { label: string; v: string }[] = [];
+  if (judge != null) stats.push({ label: "judge score", v: `${judge.toFixed(1)}/10` });
+  if (result.eval_loss != null) stats.push({ label: "eval loss", v: result.eval_loss.toFixed(3) });
+  if (result.final_loss != null) stats.push({ label: "train loss", v: result.final_loss.toFixed(3) });
+  if (result.objective != null) stats.push({ label: "objective", v: result.objective.toFixed(2) });
+
+>>>>>>> Stashed changes
   return (
     <section className="score card-hard rise">
       <span className="kicker">how it performed</span>
-      <h3 className="score-verdict">{s.verdict}</h3>
+      <h3 className="score-verdict">{verdict}</h3>
 
+<<<<<<< Updated upstream
       <div className="judge">
         <div className="judge-pips" aria-hidden>
           {Array.from({ length: s.judge_total }).map((_, i) => (
             <span key={i} className={`pip ${i < s.judge_wins ? "won" : ""}`} />
           ))}
+=======
+      {stats.length > 0 && (
+        <div className="judge-stats">
+          {stats.map((st) => (
+            <div key={st.label} className="js-stat">
+              <span className="js-v mono">{st.v}</span>
+              <span className="js-l">{st.label}</span>
+            </div>
+          ))}
         </div>
-        <p className="judge-text">
-          <strong>{s.judge_wins} of {s.judge_total}</strong> blind matchups went to your model
-        </p>
-      </div>
+      )}
 
-      <div className="measures">
-        {s.measures.map((m) => <MeasureRow key={m.name} m={m} />)}
-      </div>
+      {wins != null && (
+        <div className="judge">
+          <div className="judge-pips" aria-hidden>
+            {Array.from({ length: total }).map((_, i) => (
+              <span key={i} className={`pip ${i < wins ? "won" : ""}`} />
+            ))}
+          </div>
+          <p className="judge-text">judge score <strong>{wins}/{total}</strong></p>
+>>>>>>> Stashed changes
+        </div>
+      )}
+
+      {mock && mock.measures.length > 0 && (
+        <div className="measures">
+          {mock.measures.map((m) => <MeasureRow key={m.name} m={m} />)}
+        </div>
+      )}
 
       <p className="score-note">
+<<<<<<< Updated upstream
         {s.simulated
           ? "Illustrative scores — demo mode simulates the eval. Wire the backend judge + ROUGE harness for real numbers."
           : "Measured on your eval examples against the untuned base model."}
+=======
+        {simulated
+          ? "Illustrative scores — demo mode simulates the eval. The real backend's LLM judge + held-out eval fill these in on a live run."
+          : "Scored by the LLM judge on your test prompt against the untuned base model."}
+>>>>>>> Stashed changes
       </p>
     </section>
   );

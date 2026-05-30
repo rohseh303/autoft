@@ -227,11 +227,36 @@ def train_run(run_id: str, plan_dict: dict, eval_examples: list[dict]) -> dict:
         eval_examples=eval_examples,
     )
 
+    # LLM-judge the fine-tuned generations — the real reward signal. Same logic
+    # as the `trial` entrypoint, inline so the web /train path populates it too.
+    judge_score = None
+    if comparisons:
+        push_status("evaluating", "Scoring outputs with the LLM judge...")
+        try:
+            judged = judge_outputs.remote(
+                plan.task_summary, [c.model_dump() for c in comparisons]
+            )
+            judge_score = judged.get("mean_score")
+            for comp, j in zip(comparisons, judged.get("per_example", [])):
+                comp.judge_score = j.get("score")
+                comp.judge_critique = j.get("critique")
+        except Exception as e:  # never let a judge hiccup fail the run
+            print(f"[judge] skipped: {e}")
+
+    if judge_score is not None:
+        objective = judge_score
+    elif eval_loss is not None:
+        objective = -eval_loss
+    else:
+        objective = -(final_loss or 0.0)
+
     result = RunResult(
         run_id=run_id,
         plan=plan,
         final_loss=final_loss,
         eval_loss=eval_loss,
+        judge_score=judge_score,
+        objective=objective,
         comparisons=comparisons,
     )
     run_results[run_id] = result.model_dump()

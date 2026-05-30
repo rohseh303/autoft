@@ -337,3 +337,44 @@ body[data-theater="on"] .pulse-breathe { stroke: var(--ghost-2); }
 .spec { background: var(--paper); padding: 12px 14px; }
 .spec-v { font-size: 15px; color: var(--ink); margin-top: 4px; }
 .spec-sub { font-size: 11px; color: var(--ink-3); margin-top: 2px; }
+<<<<<<< Updated upstream
+=======
+
+/* ===== judge fields surfaced from the real backend ===================== */
+.judge-stats { display: flex; gap: 10px; margin: 18px 0 4px; }
+.js-stat { flex: 1; background: var(--paper-3); border-radius: var(--r-sm); padding: 10px 12px; }
+.js-v { display: block; font-size: 20px; color: var(--ink); }
+.js-l { font-size: 10px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--ink-3); }
+
+.cmp-in { position: relative; }
+.cmp-judge {
+  position: absolute; top: 0; right: 0; font-size: 11px;
+  color: var(--good); border: 1px solid var(--good); border-radius: 999px; padding: 1px 8px;
+}
+.cmp-critique { margin-top: 12px; padding: 10px 12px; background: var(--good-wash); border-radius: var(--r-sm); }
+.cmp-critique p { margin: 3px 0 0; font-size: 13px; color: var(--ink); font-style: italic; }
+
+/* ===== plan test prompt + reveal empty-state ========================== */
+.test-label { display: flex; align-items: baseline; gap: 8px; margin-top: 20px; }
+.test-hint { font-size: 11px; color: var(--ink-3); }
+.test-input {
+  width: 100%; margin-top: 8px; background: var(--paper-3); border: 1px solid var(--line);
+  border-radius: var(--r-sm); padding: 10px 12px; font-family: var(--sans); font-size: 14px;
+  color: var(--ink); resize: vertical; outline: none;
+}
+.test-input:focus { border-color: var(--signal); }
+.cmp-empty {
+  padding: 20px 22px; color: var(--ink-2); font-size: 14px; line-height: 1.6;
+}
+
+/* ===== reveal header actions: export + train-another =================== */
+.rv-actions { position: absolute; top: 0; right: 0; display: flex; gap: 10px; align-items: center; }
+.rv-export {
+  display: inline-flex; align-items: baseline; gap: 8px; text-decoration: none;
+  background: var(--ink); color: var(--paper); border-radius: var(--r-sm);
+  padding: 9px 16px; font-size: 14px; font-weight: 600; border: 2px solid var(--ink);
+  transition: background var(--t-fast), color var(--t-fast);
+}
+.rv-export:hover { background: var(--signal); border-color: var(--signal); color: #fff; }
+.rv-export-sub { font-family: var(--mono); font-size: 10px; font-weight: 400; opacity: 0.7; }
+>>>>>>> Stashed changes

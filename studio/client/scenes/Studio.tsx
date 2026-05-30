@@ -15,7 +15,7 @@ export function Studio(props: {
   thoughts: Thought[];
   stream: RunStream;
   error: string | null;
-  onApprove: (p: RunPlan) => void;
+  onApprove: (p: RunPlan, testInput: string) => void;
   onReset: () => void;
 }) {
   const { phase, plan, thoughts, stream, error, onApprove, onReset } = props;

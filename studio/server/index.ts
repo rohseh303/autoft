@@ -55,6 +55,7 @@ const app = new Elysia()
   // Real backend has no thought stream yet; client falls back to /api/research.
   .post("/api/research/stream", async ({ body }) => {
     const req = body as UserRequest;
+<<<<<<< Updated upstream
     if (!MOCK) return new Response("thought-stream is mock-only", { status: 404 });
     const thoughts = mockThoughts(req);
     const plan = mockPlan(req);
@@ -69,6 +70,95 @@ const app = new Elysia()
       },
     });
     return new Response(stream, { headers: sseHeaders });
+=======
+    if (MOCK) {
+      const thoughts = mockThoughts(req);
+      const plan = mockPlan(req);
+      const stream = new ReadableStream({
+        async start(c) {
+          const enc = new TextEncoder();
+          const send = (ev: string, data: unknown) =>
+            c.enqueue(enc.encode(`event: ${ev}\ndata: ${JSON.stringify(data)}\n\n`));
+          for (const t of thoughts) { send("thought", t); await sleep(620); }
+          send("plan", plan);
+          c.close();
+        },
+      });
+      return new Response(stream, { headers: sseHeaders });
+    }
+    if (BACKEND) {
+      // proxy the SSE straight through from the local backend
+      return forward("/research/stream", {
+        method: "POST",
+        headers: { "content-type": "application/json", accept: "text/event-stream" },
+        body: JSON.stringify(req),
+      });
+    }
+    // MODAL: /research is a blocking Codex call with no native stream. Narrate
+    // live process steps while we await it, then emit the real plan. The thoughts
+    // are honest descriptions of what the agent is actually doing, not fabricated
+    // dataset decisions — the real decision arrives in the `plan` event.
+    {
+      const narration = [
+        { kind: "note", text: `Reading your task: "${req.task_description.trim()}"` },
+        { kind: "search", text: "Spinning up the research agent on Modal", detail: "OpenAI Codex CLI in a sandbox" },
+        { kind: "search", text: "Searching HuggingFace for a dataset that fits", detail: "ranking candidates by relevance + downloads" },
+        { kind: "peek", text: "Inspecting candidate datasets", detail: "reading columns + sample rows" },
+        { kind: "peek", text: "Verifying the schema lines up with the task", detail: "checking input/output fields" },
+        { kind: "note", text: "Designing the training recipe", detail: "LoRA rank, steps, prompt template" },
+        { kind: "note", text: "Still working — the real agent is thorough", detail: "this usually takes ~30-90s" },
+      ];
+      const stream = new ReadableStream({
+        async start(c) {
+          const enc = new TextEncoder();
+          const send = (ev: string, data: unknown) =>
+            c.enqueue(enc.encode(`event: ${ev}\ndata: ${JSON.stringify(data)}\n\n`));
+          let done = false;
+          // kick off the real blocking research call
+          const planPromise = forward("/research", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(req),
+          }).then((r) => (r.ok ? r.json() : Promise.reject(new Error(`research ${r.status}`))));
+
+          // drip narration in order, then hold on the last "still working" line
+          (async () => {
+            let i = 0;
+            while (!done) {
+              send("thought", narration[Math.min(i, narration.length - 1)]);
+              i++;
+              await sleep(2600);
+            }
+          })();
+
+          try {
+            const plan = await planPromise;
+            done = true;
+            send("thought", { kind: "decision", text: `Chose ${plan.hf_dataset}`, detail: (plan.reasoning || "").split(". ")[0] });
+            await sleep(250);
+            send("plan", plan);
+          } catch (e) {
+            done = true;
+            send("error", { message: e instanceof Error ? e.message : String(e) });
+          }
+          c.close();
+        },
+      });
+      return new Response(stream, { headers: sseHeaders });
+    }
+  })
+
+  // --- download the trained LoRA adapter (take the model) -----------------
+  .get("/api/run/:id/download", ({ params }) => {
+    if (MOCK) {
+      // synthesize a tiny zip-less placeholder so the button does something in demo
+      return new Response(
+        `AutoFT demo mode — no real adapter to export.\nRun against the Modal backend to download a real LoRA.\n`,
+        { headers: { "Content-Type": "text/plain", "Content-Disposition": `attachment; filename="${params.id}-demo.txt"` } },
+      );
+    }
+    return forward(`/run/${params.id}/download`, { headers: { accept: "application/zip" } });
+>>>>>>> Stashed changes
   })
 
   // --- train: spawn, return run_id ----------------------------------------

@@ -1,12 +1,29 @@
 import { useState } from "react";
 import type { RunPlan } from "@shared/types";
 
+// A sensible, editable default test input per dataset, so the before/after
+// comparison populates with a real generation even when the user didn't type
+// one. The user can edit it; empty = skip the comparison (we never fabricate).
+function defaultTestInput(plan: RunPlan): string {
+  const ds = plan.hf_dataset.toLowerCase();
+  if (ds.includes("sql")) return "Which employees earn more than 100000?";
+  if (ds.includes("billsum")) return "A bill to require the Secretary of Health to publish guidelines on AI in clinical decision-making by 2027.";
+  if (ds.includes("gsm8k") || plan.task_summary.toLowerCase().includes("math")) return "She has 3 boxes with 12 apples each. How many apples does she have?";
+  if (ds.includes("samsum")) return "Amanda: I baked cookies. Want some?\nJerry: Sure, bring them over!";
+  if (ds.includes("cnn") || ds.includes("dailymail")) return "Scientists announced a new battery that charges in five minutes and lasts twice as long…";
+  if (ds.includes("code") || ds.includes("codealpaca")) return "Write a Python function that returns the nth Fibonacci number.";
+  if (ds.includes("squad")) return "What year did the event take place?";
+  if (ds.includes("alpaca") || ds.includes("instruct")) return "Rewrite this to sound natural and human: 'Per my last correspondence, kindly advise on the aforementioned matter.'";
+  return "";
+}
+
 // The plan, rendered clear — plain language up top, the knobs editable but
 // tucked behind "tune". Approving promotes us to the training theater.
-export function PlanCard({ plan, onApprove }: { plan: RunPlan; onApprove: (p: RunPlan) => void }) {
+export function PlanCard({ plan, onApprove }: { plan: RunPlan; onApprove: (p: RunPlan, testInput: string) => void }) {
   const [p, setP] = useState<RunPlan>(plan);
   const [tuning, setTuning] = useState(false);
   const [starting, setStarting] = useState(false);
+  const [testInput, setTestInput] = useState<string>(() => defaultTestInput(plan));
 
   const setT = (k: keyof RunPlan["training"], v: number) =>
     setP((cur) => ({ ...cur, training: { ...cur.training, [k]: v } }));
@@ -50,10 +67,22 @@ export function PlanCard({ plan, onApprove }: { plan: RunPlan; onApprove: (p: Ru
         </div>
       )}
 
+      <label className="test-label">
+        <span className="kicker">test prompt</span>
+        <span className="test-hint">used for the before/after + judge score — edit or clear it</span>
+      </label>
+      <textarea
+        className="test-input"
+        value={testInput}
+        onChange={(e) => setTestInput(e.target.value)}
+        placeholder="An example input to run your model on after training…"
+        rows={2}
+      />
+
       <button
         className="approve"
         disabled={starting}
-        onClick={() => { setStarting(true); onApprove(p); }}
+        onClick={() => { setStarting(true); onApprove(p, testInput.trim()); }}
       >
         {starting ? "Spinning up the GPU…" : "Start training"} <span className="arrow">→</span>
       </button>

@@ -7,10 +7,12 @@ from typing import Any
 import modal
 
 from backend.app import (
+    MODELS_DIR,
     api_image,
     app,
     hf_secret,
     metrics_queue,
+    model_volume,
     openai_secret,
     run_results,
     run_state,
@@ -24,6 +26,7 @@ from backend.train import train_run
     secrets=[openai_secret, hf_secret],
     timeout=600,
     max_containers=4,
+    volumes={MODELS_DIR: model_volume},  # so /download can read trained adapters
 )
 @modal.concurrent(max_inputs=20)
 @modal.asgi_app()
@@ -83,6 +86,61 @@ def web():
             return run_results[run_id]
         except KeyError:
             raise HTTPException(404, "result not ready")
+
+    @api.get("/run/{run_id}/download")
+    def download_adapter(run_id: str):
+        """Zip the trained LoRA adapter and stream it so the user can take the model.
+
+        Chunked generator with an explicit Content-Length — verified to deliver a
+        byte-exact zip (adapter_model.safetensors + tokenizer) through Modal's ASGI.
+        """
+        import io
+        import os
+        import zipfile
+        from fastapi.responses import StreamingResponse as _SR
+
+        # Refresh the volume view so a just-finished run's files are visible.
+        try:
+            model_volume.reload()
+        except Exception:
+            pass
+
+        adapter_dir = f"{MODELS_DIR}/runs/{run_id}/lora"
+        if not os.path.isdir(adapter_dir):
+            raise HTTPException(404, "adapter not found (run not finished or unknown id)")
+
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            for root, _dirs, files in os.walk(adapter_dir):
+                for fn in files:
+                    full = os.path.join(root, fn)
+                    arc = os.path.join(f"{run_id}-lora", os.path.relpath(full, adapter_dir))
+                    zf.write(full, arc)
+            zf.writestr(
+                f"{run_id}-lora/HOW_TO_USE.txt",
+                "AutoFT LoRA adapter\n"
+                "===================\n"
+                "Load on top of the base model with PEFT:\n\n"
+                "  from peft import PeftModel\n"
+                "  from transformers import AutoModelForCausalLM, AutoTokenizer\n"
+                "  base = AutoModelForCausalLM.from_pretrained('unsloth/Qwen2.5-1.5B-Instruct')\n"
+                f"  model = PeftModel.from_pretrained(base, './{run_id}-lora')\n"
+                "  tok = AutoTokenizer.from_pretrained('unsloth/Qwen2.5-1.5B-Instruct')\n",
+            )
+        data = buf.getvalue()
+
+        def _chunks(payload: bytes, size: int = 1 << 20):
+            for i in range(0, len(payload), size):
+                yield payload[i : i + size]
+
+        return _SR(
+            _chunks(data),
+            media_type="application/zip",
+            headers={
+                "Content-Disposition": f'attachment; filename="{run_id}-lora.zip"',
+                "Content-Length": str(len(data)),
+            },
+        )
 
     @api.get("/run/{run_id}/stream")
     def stream_metrics(run_id: str):

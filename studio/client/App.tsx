@@ -61,12 +61,19 @@ export function App() {
     }
   }
 
-  async function approve(edited: RunPlan) {
+  async function approve(edited: RunPlan, testInput: string) {
     if (!req) return;
     setError(null);
     setPlan(edited);
+    // Prefer any eval examples from the request; otherwise use the (editable)
+    // test prompt from the plan card so the before/after + judge populate.
+    const evals = req.eval_examples.length
+      ? req.eval_examples
+      : testInput
+        ? [{ input: testInput, expected_output: null }]
+        : [];
     try {
-      const { run_id } = await train(edited, req.eval_examples);
+      const { run_id } = await train(edited, evals);
       setRunId(run_id);
       setPhase("train");
     } catch (e) {

@@ -27,6 +27,7 @@ export async function train(plan: RunPlan, eval_examples: UserRequest["eval_exam
 }
 
 export const streamUrl = (runId: string) => `${base}/run/${runId}/stream`;
+export const downloadUrl = (runId: string) => `${base}/run/${runId}/download`;
 
 // POST-based SSE (fetch + ReadableStream) for the research thought-stream.
 // Returns true if the server supports it (mock), false to fall back to /research.
