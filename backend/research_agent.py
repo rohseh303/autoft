@@ -10,57 +10,9 @@ from backend.app import api_image, app, hf_secret, openai_secret
 OPENAI_MODEL = "gpt-4.1-mini"
 
 
-# ----- HF Hub tool implementations (importable, run inside the api image) -----
-
-def _hf_search(query: str, task_filter: str | None = None, limit: int = 8) -> list[dict]:
-    from huggingface_hub import HfApi, DatasetFilter
-
-    api = HfApi()
-    kwargs = {"search": query, "limit": limit, "sort": "downloads", "direction": -1}
-    if task_filter:
-        try:
-            kwargs["filter"] = DatasetFilter(task_categories=task_filter)
-        except Exception:
-            pass
-    results = []
-    try:
-        for d in api.list_datasets(**kwargs):
-            results.append({
-                "id": d.id,
-                "downloads": getattr(d, "downloads", 0),
-                "tags": (getattr(d, "tags", []) or [])[:8],
-            })
-    except Exception as e:
-        return [{"error": str(e)}]
-    return results
-
-
-def _hf_peek(dataset: str, config: str | None = None, split: str = "train") -> dict:
-    """Look up a dataset's column schema + a few sample rows via datasets-server."""
-    import requests
-
-    base = "https://datasets-server.huggingface.co"
-    params = {"dataset": dataset}
-    if config:
-        params["config"] = config
-    try:
-        info = requests.get(f"{base}/info", params=params, timeout=15).json()
-    except Exception as e:
-        return {"error": f"info failed: {e}"}
-    configs = list((info.get("dataset_info") or {}).keys())
-    chosen_config = config or (configs[0] if configs else "default")
-    try:
-        rows = requests.get(
-            f"{base}/rows",
-            params={"dataset": dataset, "config": chosen_config, "split": split, "offset": 0, "length": 3},
-            timeout=15,
-        ).json()
-    except Exception as e:
-        return {"error": f"rows failed: {e}", "configs": configs}
-    features = rows.get("features", [])
-    columns = [f.get("name") for f in features]
-    samples = [{k: (str(v)[:200]) for k, v in r.get("row", {}).items()} for r in rows.get("rows", [])]
-    return {"configs": configs, "config_used": chosen_config, "columns": columns, "sample_rows": samples}
+# HF tools live in shared/hf_tools.py so the local CLI (backend/hf_cli.py) can
+# reuse them without importing Modal. Aliased to keep the tool dispatch stable.
+from shared.hf_tools import hf_peek as _hf_peek, hf_search as _hf_search
 
 
 # ----- Tool schemas exposed to the model -----

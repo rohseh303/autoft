@@ -76,10 +76,15 @@ class EvalComparison(BaseModel):
     base_output: str
     finetuned_output: str
     expected_output: str | None = None
+    judge_score: float | None = None      # 0-10, set by the LLM judge
+    judge_critique: str | None = None      # one-line "what to improve next"
 
 
 class RunResult(BaseModel):
     run_id: str
     plan: RunPlan
-    final_loss: float | None = None
+    final_loss: float | None = None        # training loss (drops, overfits — not the objective)
+    eval_loss: float | None = None         # held-out loss (generalization signal)
+    judge_score: float | None = None       # mean LLM-judge score across eval examples, 0-10
+    objective: float | None = None         # the scalar the post-training lead maximizes
     comparisons: list[EvalComparison] = Field(default_factory=list)

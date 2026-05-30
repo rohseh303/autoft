@@ -13,3 +13,12 @@ frontend/build/
 .DS_Store
 .modal/
 checkpoints/
+
+# Post-training lead working files (seeded from fixtures/, mutated each run)
+/plan.json
+/eval.json
+/task.txt
+/result.json
+/trials.jsonl
+/kickoff.md
+/lead_summary.txt

@@ -1,0 +1,1 @@
+Summarize US Congressional bills into one or two plain-English sentences that a non-lawyer can understand. Stay faithful to the bill's actual content, name what it does and who it affects, and avoid legalese.

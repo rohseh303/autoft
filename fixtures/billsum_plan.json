@@ -1,7 +1,7 @@
 {
   "task_summary": "Summarize US Congressional bills into concise plain-English summaries.",
   "base_model": "Qwen2.5-0.5B-Instruct",
-  "hf_dataset": "billsum",
+  "hf_dataset": "FiscalNote/billsum",
   "dataset_config": null,
   "dataset_split": "train[:2000]",
   "input_field": "text",
