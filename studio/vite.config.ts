@@ -21,7 +21,7 @@ export default defineConfig({
     port: 5173,
     proxy: {
       "/api": {
-        target: "http://localhost:8787",
+        target: process.env.BFF_URL ?? "http://localhost:8787",
         changeOrigin: true,
         // SSE needs the proxy to not buffer.
         configure: (proxy) => {

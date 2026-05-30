@@ -14,23 +14,47 @@ export function Reveal({ result, points, onReset }: { result: RunResult; points:
         <button className="rv-again" onClick={onReset}>Train another →</button>
       </div>
       {result.comparisons.map((c, i) => (
-        <Compare key={i} input={c.input} base={c.base_output} ft={c.finetuned_output} expected={c.expected_output} />
+        <Compare
+          key={i}
+          input={c.input}
+          base={c.base_output}
+          ft={c.finetuned_output}
+          expected={c.expected_output}
+          judgeScore={c.judge_score}
+          critique={c.judge_critique}
+        />
       ))}
 
-      {result.scorecard && <ScoreCard s={result.scorecard} />}
+      {result.scorecard && <ScoreCard s={result.scorecard} result={result} />}
 
       <TechCard plan={result.plan} points={points} finalLoss={result.final_loss} />
     </div>
   );
 }
 
-// The evidence — a blind-preference verdict + soft base-vs-yours measures.
+// The evidence — the LLM judge's verdict + soft base-vs-yours measures.
 // Warm and editorial on purpose: a report card, not a dashboard.
-function ScoreCard({ s }: { s: Scorecard }) {
+function ScoreCard({ s, result }: { s: Scorecard; result: RunResult }) {
+  const stats: { label: string; v: string }[] = [];
+  if (result.judge_score != null) stats.push({ label: "judge score", v: `${result.judge_score.toFixed(1)}/10` });
+  if (result.eval_loss != null) stats.push({ label: "eval loss", v: result.eval_loss.toFixed(3) });
+  if (result.objective != null) stats.push({ label: "objective", v: result.objective.toFixed(2) });
+
   return (
     <section className="score card-hard rise">
       <span className="kicker">how it performed</span>
       <h3 className="score-verdict">{s.verdict}</h3>
+
+      {stats.length > 0 && (
+        <div className="judge-stats">
+          {stats.map((st) => (
+            <div key={st.label} className="js-stat">
+              <span className="js-v mono">{st.v}</span>
+              <span className="js-l">{st.label}</span>
+            </div>
+          ))}
+        </div>
+      )}
 
       <div className="judge">
         <div className="judge-pips" aria-hidden>
@@ -49,8 +73,8 @@ function ScoreCard({ s }: { s: Scorecard }) {
 
       <p className="score-note">
         {s.simulated
-          ? "Illustrative scores — demo mode simulates the eval. Wire the backend judge + ROUGE harness for real numbers."
-          : "Measured on your eval examples against the untuned base model."}
+          ? "Illustrative scores — demo mode simulates the eval. The real backend's LLM judge + held-out eval fill these in on a live run."
+          : "Scored by the LLM judge on your eval examples against the untuned base model."}
       </p>
     </section>
   );
@@ -109,7 +133,7 @@ function TechCard({ plan, points, finalLoss }: {
       <div className="tech-specs">
         <Spec label="trainable params" v={fmtParams(trainable)} sub={`${pctTrainable.toFixed(2)}% of ${fmtParams(totalP)}`} />
         <Spec label="adapter" v={`LoRA r=${t.lora_r}`} sub={`α=${t.lora_alpha} · 7 proj layers`} />
-        <Spec label="precision" v="4-bit QLoRA" sub="bf16 compute" />
+        <Spec label="precision" v="16-bit LoRA" sub="bf16 compute" />
         <Spec label="effective batch" v={String(t.batch_size * t.gradient_accumulation_steps)} sub={`${t.batch_size} × ${t.gradient_accumulation_steps} accum`} />
         <Spec label="optimizer" v="adamw_8bit" sub={`lr ${t.learning_rate.toExponential(0)} · linear`} />
         <Spec label="seq length" v={`${t.max_seq_length}`} sub={`${t.warmup_steps} warmup steps`} />
@@ -151,14 +175,15 @@ function Spec({ label, v, sub }: { label: string; v: string; sub: string }) {
   );
 }
 
-// rough param math so the internals read true to the chosen base model
-function baseParams(model: string): number {
-  return model.includes("1.7B") ? 1.7e9 : 0.5e9;
+// rough param math so the internals read true to the chosen base model.
+// Merged backend ships a single base: Qwen3.5-2B (~2B params, d_model≈2048, 28 layers).
+function baseParams(_model: string): number {
+  return 2.0e9;
 }
-function trainableParams(model: string, r: number): number {
+function trainableParams(_model: string, r: number): number {
   // LoRA params ≈ 2 · r · d_model · (#target matrices) · #layers — approximated
-  const d = model.includes("1.7B") ? 2048 : 896;
-  const layers = model.includes("1.7B") ? 24 : 24;
+  const d = 2048;
+  const layers = 28;
   return 2 * r * d * 7 * layers;
 }
 function fmtParams(n: number): string {
@@ -168,8 +193,9 @@ function fmtParams(n: number): string {
   return String(n);
 }
 
-function Compare({ input, base, ft, expected }: {
+function Compare({ input, base, ft, expected, judgeScore, critique }: {
   input: string; base: string; ft: string; expected?: string | null;
+  judgeScore?: number | null; critique?: string | null;
 }) {
   const [split, setSplit] = useState(50);
   const ref = useRef<HTMLDivElement>(null);
@@ -181,7 +207,11 @@ function Compare({ input, base, ft, expected }: {
 
   return (
     <div className="cmp card-hard">
-      <div className="cmp-in"><span className="kicker">input</span><p>{input}</p></div>
+      <div className="cmp-in">
+        <span className="kicker">input</span>
+        {judgeScore != null && <span className="cmp-judge mono">judge {judgeScore.toFixed(1)}/10</span>}
+        <p>{input}</p>
+      </div>
 
       <div
         className="cmp-stage" ref={ref}
@@ -201,6 +231,12 @@ function Compare({ input, base, ft, expected }: {
         </div>
       </div>
 
+      {critique && (
+        <div className="cmp-critique">
+          <span className="kicker">judge note</span>
+          <p>{critique}</p>
+        </div>
+      )}
       {expected && <div className="cmp-exp"><span className="kicker">expected</span><p>{expected}</p></div>}
     </div>
   );
