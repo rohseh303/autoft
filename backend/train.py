@@ -27,7 +27,7 @@ from backend.judge import judge_outputs  # noqa: E402
 @app.function(
     image=train_image,
     gpu=os.environ.get("AUTOFT_GPU", "L4"),
-    timeout=60 * 30,
+    timeout=60 * 60 * 24,  # 24h = Modal's max ("unlimited"); Qwen3.5 Mamba-kernel compile is slow
     volumes={MODELS_DIR: model_volume},
     secrets=[hf_secret],
 )
