@@ -14,6 +14,8 @@ from backend.app import (
     hf_secret,
     metrics_queue,
     model_volume,
+    run_events,
+    run_metrics,
     run_results,
     run_state,
     train_image,
@@ -26,8 +28,8 @@ from backend.judge import judge_outputs  # noqa: E402
 
 @app.function(
     image=train_image,
-    gpu=os.environ.get("AUTOFT_GPU", "L4"),
-    timeout=60 * 30,
+    gpu=os.environ.get("AUTOFT_GPU", "H200"),
+    timeout=60 * 60 * 24,  # 24h (Modal max) — Qwen3.5 Mamba-kernel compile is slow
     volumes={MODELS_DIR: model_volume},
     secrets=[hf_secret],
 )
@@ -55,11 +57,22 @@ def train_run(run_id: str, plan_dict: dict, eval_examples: list[dict]) -> dict:
     )
 
     plan = RunPlan.model_validate(plan_dict)
+    t0 = time.time()
+    run_metrics[run_id] = []   # fresh per-run accumulators polled by the Studio UI
+    run_events[run_id] = []
+
+    def _emit(source: str, kind: str, text: str, step=None, detail=None) -> None:
+        # Transparency timeline event — tagged by which subagent emitted it.
+        run_events[run_id] = (run_events.get(run_id) or []) + [{
+            "ts": round(time.time() - t0, 2), "source": source, "kind": kind,
+            "text": text, "step": step, "detail": detail,
+        }]
 
     def push_status(state: str, message: str = "") -> None:
         run_state[run_id] = RunStatus(
             run_id=run_id, state=state, message=message, plan=plan
         ).model_dump()
+        _emit("trainer", "status", message or state)
 
     push_status("loading", f"Loading {plan.base_model}...")
 
@@ -156,6 +169,7 @@ def train_run(run_id: str, plan_dict: dict, eval_examples: list[dict]) -> dict:
                 elapsed_seconds=time.time() - start,
             )
             metrics_queue.put(metric.model_dump(), partition=run_id)
+            run_metrics[run_id] = (run_metrics.get(run_id) or []) + [metric.model_dump()]
 
     push_status("training", "Trainer running...")
 
@@ -337,14 +351,16 @@ def trial(
     elif eval_loss is not None:
         objective = -eval_loss
     else:
-        objective = -(result.get("final_loss") or 0.0)
+        # No judge AND no eval_loss: the objective is unavailable. Do NOT fall back
+        # to training loss (it's never the objective, and None->0.0 would look great).
+        objective = None
     result["objective"] = objective
 
     Path(out).write_text(json.dumps(result, indent=2))
 
     record = {
         "run_id": run_id,
-        "objective": round(objective, 4),
+        "objective": round(objective, 4) if objective is not None else None,
         "judge_score": judge_score,
         "eval_loss": round(eval_loss, 4) if eval_loss is not None else None,
         "final_loss": round(result["final_loss"], 4) if result.get("final_loss") is not None else None,
@@ -357,8 +373,9 @@ def trial(
     with open(ledger, "a") as f:
         f.write(json.dumps(record) + "\n")
 
+    obj_str = "n/a" if objective is None else f"{objective:.3f}"
     print(
-        f"[{run_id}] objective={objective:.3f}  judge={judge_score}  "
+        f"[{run_id}] objective={obj_str}  judge={judge_score}  "
         f"eval_loss={eval_loss}  final_loss={result.get('final_loss')}"
     )
     print(f"[{run_id}] wrote {out}; appended {ledger}. Read {out} for per-example outputs + critiques.")

@@ -69,6 +69,11 @@ metrics_queue = modal.Queue.from_name("autoft-metrics", create_if_missing=True)
 run_state = modal.Dict.from_name("autoft-run-state", create_if_missing=True)
 # Final results (RunResult serialized as dict).
 run_results = modal.Dict.from_name("autoft-run-results", create_if_missing=True)
+# Accumulated per-step metrics (list of StepMetric dicts) — polled for live charts.
+run_metrics = modal.Dict.from_name("autoft-run-metrics", create_if_missing=True)
+# Transparency event timeline (status + agent/subprocess reasoning), each tagged
+# {source, step, kind, text} — polled by the Studio UI for a "what's happening" view.
+run_events = modal.Dict.from_name("autoft-run-events", create_if_missing=True)
 
 # Secrets ------------------------------------------------------------------
 # Secret names are overridable so the app can run against whatever the active

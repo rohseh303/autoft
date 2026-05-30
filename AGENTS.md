@@ -62,14 +62,14 @@ out-of-range values:
 | `training.learning_rate` | > 0 | 2e-4 | highest-leverage knob; sweep 1e-4 → 5e-4 first |
 | `training.max_steps` | 10–2000 | 150 | raise if eval_loss still dropping; lower if overfitting |
 | `training.lora_r` | 4–128 | 16 | capacity; raise for harder tasks (pair with alpha) |
-| `training.lora_alpha` | 4–128 | 16 | usually keep ≈ lora_r |
+| `training.lora_alpha` | 4–128 | 32 | 2×r heuristic (Unsloth cookbook) |
 | `training.batch_size` | 1–16 | 2 | L4 is memory-bound; raise with care |
-| `training.gradient_accumulation_steps` | 1–32 | 4 | effective batch = batch_size × this |
+| `training.gradient_accumulation_steps` | 1–32 | 8 | effective batch = batch_size × this (=16) |
 | `training.warmup_steps` | ≥ 0 | 10 | |
 | `training.max_seq_length` | 256–8192 | 2048 | lower = faster when inputs are short |
 | `prompt_template` | must contain `{input}` and `{output}` | — | fix when the judge flags format / instruction-following |
 | `dataset_split` | e.g. `train[:2000]` | — | keep small for fast feedback; raise if data-starved |
-| `base_model` | `Qwen2.5-0.5B-Instruct` \| `SmolLM2-1.7B-Instruct` | Qwen | try the 1.7B if the 0.5B plateaus low |
+| `base_model` | `Qwen3.5-2B` | Qwen3.5-2B | the only supported model (bf16 LoRA) |
 
 **Change ONE thing per trial** so you can attribute the effect. (A coupled pair
 like `lora_r` / `lora_alpha` counts as one change.)

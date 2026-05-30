@@ -12,6 +12,8 @@ from backend.app import (
     hf_secret,
     metrics_queue,
     openai_secret,
+    run_events,
+    run_metrics,
     run_results,
     run_state,
 )
@@ -83,6 +85,22 @@ def web():
             return run_results[run_id]
         except KeyError:
             raise HTTPException(404, "result not ready")
+
+    @api.get("/run/{run_id}/metrics")
+    def get_metrics(run_id: str):
+        # Polling-friendly snapshot for live charts: status + the full accumulated
+        # step-metric array + final result (when ready). The frontend polls this.
+        return {
+            "status": run_state.get(run_id),
+            "metrics": run_metrics.get(run_id, []),
+            "result": run_results.get(run_id),
+        }
+
+    @api.get("/run/{run_id}/events")
+    def get_events(run_id: str):
+        # Transparency timeline: status transitions + agent/subprocess reasoning,
+        # each tagged {source, step, kind, text}. Polled by the Studio UI.
+        return {"events": run_events.get(run_id, [])}
 
     @api.get("/run/{run_id}/stream")
     def stream_metrics(run_id: str):

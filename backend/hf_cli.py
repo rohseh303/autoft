@@ -3,8 +3,8 @@
 No Modal needed — these are plain HTTP / Hub calls, so they're fast to run in
 the optimization loop.
 
-    uv run python backend/hf_cli.py peek billsum --split train
-    uv run python backend/hf_cli.py peek cnn_dailymail --config 3.0.0
+    uv run python backend/hf_cli.py peek FiscalNote/billsum --split train
+    uv run python backend/hf_cli.py peek abisee/cnn_dailymail --config 3.0.0
     uv run python backend/hf_cli.py search "legal summarization" --task summarization
 """
 from __future__ import annotations
