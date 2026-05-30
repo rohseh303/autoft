@@ -1,0 +1,148 @@
+/* ============================================================================
+   "Bench" — the AutoFT Studio design system.
+   Lab-notebook (light, editorial) meets terminal (dark training theater).
+   One system, three moments. Do not introduce ad-hoc colors in components —
+   reach for a token. That's what keeps the blend from becoming Frankenstein.
+   ========================================================================== */
+
+:root {
+  /* --- light surface (Describe / Research / Plan / Compare) --- */
+  --paper:      #F7F4EC; /* warm cream base                         */
+  --paper-2:    #EFEBDF; /* raised cream (cards)                    */
+  --paper-3:    #E7E2D2; /* inset / wells                          */
+  --line:       #DAD3C1; /* hairline borders                       */
+  --line-bold:  #16150F; /* brutalist hard border (ink)            */
+
+  --ink:        #16150F; /* primary text (warm near-black)         */
+  --ink-2:      #5C5747; /* secondary text                         */
+  --ink-3:      #8A8472; /* tertiary / captions                    */
+
+  /* --- the single accent --- */
+  --signal:     #FF4D1C; /* signal orange — the one accent         */
+  --signal-2:   #FF6A40; /* hover                                  */
+  --signal-ink: #B8350E; /* orange that's readable as text         */
+  --signal-wash:#FFE9E0; /* faint orange fill                      */
+
+  --good:       #0E7C5A; /* positive delta on light                */
+  --good-wash:  #DDF1E8;
+
+  /* --- dark training theater --- */
+  --void:       #0B0B0D;
+  --void-2:     #141418;
+  --void-3:     #1C1C22;
+  --wire:       #2A2A32;
+  --ghost:      #ECE9E0; /* text on dark                           */
+  --ghost-2:    #9A968C;
+  --phosphor:   #46E5A0; /* live model output — terminal green     */
+  --phosphor-dim:#1E7A55;
+  --signal-dark:#FF5A2C; /* accent on dark                         */
+
+  /* --- type --- */
+  --serif: "Instrument Serif", Georgia, serif;
+  --sans:  "Inter", system-ui, -apple-system, sans-serif;
+  --mono:  "JetBrains Mono", ui-monospace, "SF Mono", monospace;
+
+  /* --- spacing / shape --- */
+  --r-sm: 6px;
+  --r:    12px;
+  --r-lg: 20px;
+  --shadow-hard: 4px 4px 0 0 var(--ink);   /* brutalist drop      */
+  --shadow-soft: 0 8px 30px -12px rgba(22,21,15,0.25);
+
+  --maxw: 1080px;
+
+  /* --- motion --- */
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --t-fast: 160ms;
+  --t:      280ms;
+  --t-slow: 600ms;
+}
+
+* { box-sizing: border-box; }
+
+html, body, #root {
+  margin: 0;
+  height: 100%;
+}
+
+body {
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 15px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  /* faint engineering-paper grid */
+  background-image:
+    linear-gradient(rgba(22,21,15,0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(22,21,15,0.025) 1px, transparent 1px);
+  background-size: 28px 28px;
+  transition: background-color var(--t-slow) var(--ease), color var(--t-slow) var(--ease);
+}
+
+/* dark theater mode — toggled on <body data-theater> */
+body[data-theater="on"] {
+  background-color: var(--void);
+  color: var(--ghost);
+  background-image:
+    linear-gradient(rgba(255,255,255,0.022) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,0.022) 1px, transparent 1px);
+}
+
+h1, h2, h3 { font-family: var(--serif); font-weight: 400; letter-spacing: -0.01em; line-height: 1.05; margin: 0; }
+
+.mono { font-family: var(--mono); }
+.serif { font-family: var(--serif); }
+
+::selection { background: var(--signal); color: #fff; }
+
+button { font-family: inherit; cursor: pointer; }
+a { color: var(--signal-ink); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+
+/* shared utility bits ------------------------------------------------------ */
+
+.kicker {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+body[data-theater="on"] .kicker { color: var(--ghost-2); }
+
+.card {
+  background: var(--paper-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+}
+
+/* brutalist accent card — used sparingly for hero moments */
+.card-hard {
+  background: var(--paper);
+  border: 2px solid var(--line-bold);
+  border-radius: var(--r);
+  box-shadow: var(--shadow-hard);
+}
+
+@keyframes pulse-ring {
+  0%   { box-shadow: 0 0 0 0 rgba(255,77,28,0.45); }
+  70%  { box-shadow: 0 0 0 10px rgba(255,77,28,0); }
+  100% { box-shadow: 0 0 0 0 rgba(255,77,28,0); }
+}
+@keyframes dash-flow { to { stroke-dashoffset: -16; } }
+@keyframes blink { 50% { opacity: 0; } }
+@keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+.rise { animation: rise var(--t) var(--ease) both; }
+
+.caret::after {
+  content: "▋";
+  color: var(--signal);
+  animation: blink 1s steps(1) infinite;
+  margin-left: 1px;
+}
+body[data-theater="on"] .caret::after { color: var(--phosphor); }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.001ms !important; transition-duration: 0.001ms !important; }
+}

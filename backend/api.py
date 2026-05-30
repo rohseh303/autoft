@@ -1,6 +1,4 @@
 """FastAPI endpoints exposed via Modal: /research, /train, /run/{id}/stream, /run/{id}/result."""
-from __future__ import annotations
-
 import asyncio
 import json
 import uuid
@@ -17,6 +15,8 @@ from backend.app import (
     run_results,
     run_state,
 )
+from backend.research_agent import research
+from backend.train import train_run
 
 
 @app.function(
@@ -28,13 +28,11 @@ from backend.app import (
 @modal.concurrent(max_inputs=20)
 @modal.asgi_app()
 def web():
-    from fastapi import FastAPI, HTTPException
+    from fastapi import Body, FastAPI, HTTPException
     from fastapi.middleware.cors import CORSMiddleware
     from fastapi.responses import StreamingResponse
     from pydantic import BaseModel
 
-    from backend.research_agent import research
-    from backend.train import train_run
     from shared.schemas import EvalExample, RunPlan, RunStatus, UserRequest
 
     api = FastAPI(title="AutoFT")
@@ -50,11 +48,8 @@ def web():
         return {"name": "autoft", "ok": True}
 
     @api.post("/research")
-    def do_research(req: UserRequest):
-        # research_agent now runs the Codex CLI locally (no .remote, no OpenAI
-        # key). The deployed Modal container has no `codex`, so in practice run
-        # research via the local CLI: `uv run python backend/research_agent.py`.
-        plan_dict = research(
+    def do_research(req: UserRequest = Body(...)):
+        plan_dict = research.remote(
             req.task_description,
             [e.model_dump() for e in req.eval_examples],
             req.preferred_model,
@@ -66,7 +61,7 @@ def web():
         eval_examples: list[EvalExample] = []
 
     @api.post("/train")
-    def do_train(req: TrainRequest):
+    def do_train(req: TrainRequest = Body(...)):
         run_id = f"run-{uuid.uuid4().hex[:10]}"
         run_state[run_id] = RunStatus(
             run_id=run_id, state="pending", message="queued", plan=req.plan

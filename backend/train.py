@@ -1,4 +1,4 @@
-"""Fine-tuning entry point. Loads model with Unsloth, runs SFTTrainer, streams metrics."""
+"""Fine-tuning entry point. Loads model with Unsloth, runs an HF Trainer, streams metrics."""
 from __future__ import annotations
 
 import json
@@ -33,18 +33,21 @@ from backend.judge import judge_outputs  # noqa: E402
 )
 def train_run(run_id: str, plan_dict: dict, eval_examples: list[dict]) -> dict:
     """Run an SFT training job. Pushes metrics to `metrics_queue` partitioned by run_id."""
-    # Imports inside the function so they only resolve in the train image.
-    # Unsloth MUST be imported before trl/transformers/peft so its patches apply
-    # (otherwise its SFTTrainer eos-token handling doesn't take and trl rejects it).
+    # Unsloth MUST be imported before transformers so its patches apply.
     from unsloth import FastLanguageModel
 
+    import datasets as _datasets
+    _datasets.disable_caching()
     from datasets import load_dataset
-    from transformers import TrainerCallback
-    from trl import SFTConfig, SFTTrainer
+    from transformers import (
+        DataCollatorForLanguageModeling,
+        Trainer,
+        TrainerCallback,
+        TrainingArguments,
+    )
 
     from shared.schemas import (
         MODEL_REGISTRY,
-        EvalComparison,
         RunPlan,
         RunResult,
         RunStatus,
@@ -84,8 +87,8 @@ def train_run(run_id: str, plan_dict: dict, eval_examples: list[dict]) -> dict:
         lora_dropout=0,
         bias="none",
         # No checkpointing/offload: a 2B bf16 model (~5GB) fits easily on these
-        # GPUs, so the "unsloth" offload (meant for long-context/low-VRAM) just
-        # slows us down. Flip back to "unsloth" only for big models / long ctx.
+        # GPUs, so the "unsloth" offload (for long-context/low-VRAM) just slows us
+        # down. Flip back to "unsloth" only for big models / long context.
         use_gradient_checkpointing=False,
         random_state=plan.training.seed,
         max_seq_length=plan.training.max_seq_length,
@@ -120,6 +123,14 @@ def train_run(run_id: str, plan_dict: dict, eval_examples: list[dict]) -> dict:
     columns_to_drop = [c for c in ds.column_names if c != "text"]
     ds = ds.map(_format_row, remove_columns=columns_to_drop)
 
+    max_len = plan.training.max_seq_length
+
+    def _tokenize_batch(batch):
+        return tokenizer(batch["text"], truncation=True, max_length=max_len, padding=False)
+
+    ds = ds.map(_tokenize_batch, batched=True, remove_columns=["text"])
+    print(f"[autoft] pre-tokenized {len(ds)} examples; columns={ds.column_names}")
+
     # Carve a held-out slice so we can report generalization (eval_loss), not
     # just training loss. Best-effort: tiny datasets just skip it.
     eval_ds = None
@@ -146,42 +157,45 @@ def train_run(run_id: str, plan_dict: dict, eval_examples: list[dict]) -> dict:
             )
             metrics_queue.put(metric.model_dump(), partition=run_id)
 
-    push_status("training", "SFTTrainer running...")
+    push_status("training", "Trainer running...")
 
     output_dir = f"{MODELS_DIR}/runs/{run_id}"
     Path(output_dir).mkdir(parents=True, exist_ok=True)
 
-    trainer = SFTTrainer(
+    if tokenizer.eos_token is None:
+        tokenizer.eos_token = "<|endoftext|>"
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    print(f"[autoft] tokenizer.eos_token={tokenizer.eos_token!r} pad_token={tokenizer.pad_token!r}")
+
+    training_args = TrainingArguments(
+        per_device_train_batch_size=plan.training.batch_size,
+        per_device_eval_batch_size=plan.training.batch_size,
+        gradient_accumulation_steps=plan.training.gradient_accumulation_steps,
+        warmup_steps=plan.training.warmup_steps,
+        max_steps=plan.training.max_steps,
+        learning_rate=plan.training.learning_rate,
+        fp16=False,
+        bf16=True,
+        logging_steps=1,
+        optim="adamw_8bit",
+        weight_decay=0.01,
+        lr_scheduler_type="linear",
+        seed=plan.training.seed,
+        output_dir=output_dir,
+        report_to="none",
+        save_strategy="no",
+        dataloader_num_workers=0,
+        dataloader_persistent_workers=False,
+        remove_unused_columns=False,
+    )
+
+    trainer = Trainer(
         model=model,
-        processing_class=tokenizer,  # trl/transformers renamed `tokenizer` to this
+        args=training_args,
         train_dataset=ds,
         eval_dataset=eval_ds,
-        args=SFTConfig(
-            # In modern trl these live on SFTConfig (not SFTTrainer), and
-            # max_seq_length was renamed to max_length.
-            dataset_text_field="text",
-            max_length=plan.training.max_seq_length,
-            # modern trl validates SFTConfig.eos_token against the vocab and
-            # defaults to a literal placeholder; use the tokenizer's real one.
-            eos_token=tokenizer.eos_token,
-            per_device_train_batch_size=plan.training.batch_size,
-            per_device_eval_batch_size=plan.training.batch_size,
-            gradient_accumulation_steps=plan.training.gradient_accumulation_steps,
-            warmup_steps=plan.training.warmup_steps,
-            max_steps=plan.training.max_steps,
-            learning_rate=plan.training.learning_rate,
-            fp16=False,
-            bf16=True,
-            logging_steps=1,
-            optim="adamw_8bit",
-            weight_decay=0.01,
-            lr_scheduler_type="linear",
-            seed=plan.training.seed,
-            output_dir=output_dir,
-            report_to="none",
-            save_strategy="no",
-            dataset_num_proc=1,
-        ),
+        data_collator=DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False),
         callbacks=[StreamCallback()],
     )
 
@@ -270,59 +284,16 @@ def _run_eval(plan, model, tokenizer, eval_examples):
 
 
 @app.local_entrypoint()
-def smoke():
-    """Local smoke test: `modal run backend/train.py` runs billsum + Qwen2.5-0.5B."""
-    import uuid
-
-    plan = {
-        "task_summary": "Summarize US Congressional bills concisely.",
-        "base_model": "Qwen3.5-2B",
-        "hf_dataset": "FiscalNote/billsum",
-        "dataset_config": None,
-        "dataset_split": "train[:500]",
-        "input_field": "text",
-        "output_field": "summary",
-        "prompt_template": "### Instruction:\nSummarize the following bill:\n\n{input}\n\n### Response:\n{output}",
-        "benchmarks": ["billsum-rouge"],
-        "training": {
-            "max_steps": 30,
-            "learning_rate": 2e-4,
-            "batch_size": 2,
-            "gradient_accumulation_steps": 4,
-            "lora_r": 16,
-            "lora_alpha": 16,
-            "max_seq_length": 1024,
-            "warmup_steps": 5,
-            "seed": 42,
-        },
-        "reasoning": "smoke",
-    }
-    eval_examples = [
-        {"input": "A bill to require the Secretary of Health to publish guidelines on AI in clinical decision-making by 2027.", "expected_output": None},
-    ]
-    run_id = f"smoke-{uuid.uuid4().hex[:8]}"
-    out = train_run.remote(run_id, plan, eval_examples)
-    print(f"run_id={run_id}")
-    print(f"final_loss={out['final_loss']}")
-    for c in out["comparisons"]:
-        print("=" * 60)
-        print(f"INPUT: {c['input'][:200]}")
-        print(f"BASE:  {c['base_output'][:300]}")
-        print(f"FT:    {c['finetuned_output'][:300]}")
-
-
-@app.local_entrypoint()
 def trial(
     plan: str = "plan.json",
     out: str = "result.json",
     evals: str = "eval.json",
     ledger: str = "trials.jsonl",
 ):
-    """One optimization trial — the post-training lead's unit of work.
+    """One optimization trial — train + held-out eval + LLM judge -> result.json.
 
-    Reads the recipe from `plan` and the held-out test from `evals`, trains +
-    evals on Modal, has the LLM judge score the outputs, then writes the full
-    result to `out` and appends a one-line summary to `ledger`.
+    The post-training lead (Codex) edits `plan.json`, runs this, then reads
+    `result.json` (generations + judge critiques) and `trials.jsonl` (history).
 
         modal run backend/train.py::trial --plan plan.json --out result.json
     """
@@ -343,12 +314,13 @@ def trial(
 
     result = train_run.remote(run_id, plan_dict, eval_examples)
 
-    # Judge the fine-tuned generations elementwise (one OpenAI call per example).
+    # Judge the fine-tuned generations (OpenAI, on Modal). Degrade to eval_loss
+    # if the judge can't run (missing secret / infra down).
     judge_score = None
     if result.get("comparisons"):
         try:
             judged = judge_outputs.remote(plan_dict.get("task_summary", ""), result["comparisons"])
-        except Exception as e:  # missing secret / judge infra down -> degrade to eval_loss
+        except Exception as e:  # noqa: BLE001
             judged = {"mean_score": None, "per_example": [], "error": str(e)}
         judge_score = judged.get("mean_score")
         if judge_score is None:
@@ -358,8 +330,7 @@ def trial(
             comp["judge_score"] = j.get("score")
             comp["judge_critique"] = j.get("critique")
 
-    # Objective: judge score is primary (it's the real product goal); fall back
-    # to negative eval loss when there are no eval examples to judge.
+    # Objective: judge score is primary; fall back to negative eval loss.
     eval_loss = result.get("eval_loss")
     if judge_score is not None:
         objective = judge_score
@@ -391,3 +362,45 @@ def trial(
         f"eval_loss={eval_loss}  final_loss={result.get('final_loss')}"
     )
     print(f"[{run_id}] wrote {out}; appended {ledger}. Read {out} for per-example outputs + critiques.")
+
+
+@app.local_entrypoint()
+def smoke():
+    """Local smoke test: `modal run backend/train.py::smoke` (billsum + Qwen3.5-2B)."""
+    import uuid
+
+    plan = {
+        "task_summary": "Summarize US Congressional bills concisely.",
+        "base_model": "Qwen3.5-2B",
+        "hf_dataset": "FiscalNote/billsum",
+        "dataset_config": None,
+        "dataset_split": "train[:500]",
+        "input_field": "text",
+        "output_field": "summary",
+        "prompt_template": "### Instruction:\nSummarize the following bill:\n\n{input}\n\n### Response:\n{output}",
+        "benchmarks": ["billsum-rouge"],
+        "training": {
+            "max_steps": 30,
+            "learning_rate": 2e-4,
+            "batch_size": 2,
+            "gradient_accumulation_steps": 8,
+            "lora_r": 16,
+            "lora_alpha": 32,
+            "max_seq_length": 1024,
+            "warmup_steps": 5,
+            "seed": 42,
+        },
+        "reasoning": "smoke",
+    }
+    eval_examples = [
+        {"input": "A bill to require the Secretary of Health to publish guidelines on AI in clinical decision-making by 2027.", "expected_output": None},
+    ]
+    run_id = f"smoke-{uuid.uuid4().hex[:8]}"
+    out = train_run.remote(run_id, plan, eval_examples)
+    print(f"run_id={run_id}")
+    print(f"final_loss={out['final_loss']}")
+    for c in out["comparisons"]:
+        print("=" * 60)
+        print(f"INPUT: {c['input'][:200]}")
+        print(f"BASE:  {c['base_output'][:300]}")
+        print(f"FT:    {c['finetuned_output'][:300]}")

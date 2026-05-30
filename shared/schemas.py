@@ -1,6 +1,4 @@
 """Shared schemas — the contract between the research agent, trainer, and frontend."""
-from __future__ import annotations
-
 from typing import Literal
 
 from pydantic import BaseModel, Field

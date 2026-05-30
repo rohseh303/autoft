@@ -1,0 +1,29 @@
+{
+  "name": "autoft-studio",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "AutoFT Studio — chatbox-first UI for autonomous fine-tuning. Bun + Elysia BFF + React/Vite.",
+  "scripts": {
+    "dev": "bun run scripts/dev.ts",
+    "dev:client": "vite",
+    "dev:server": "bun --watch server/index.ts",
+    "build": "vite build",
+    "start": "NODE_ENV=production bun server/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@elysiajs/cors": "^1.1.1",
+    "elysia": "^1.1.27",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.1.14",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "typescript": "^5.6.3",
+    "vite": "^6.0.3"
+  }
+}
