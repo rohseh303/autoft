@@ -10,73 +10,65 @@ import json
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+ROOT = Path(__file__).resolve().parent.parent
+# Repo root on sys.path so `shared` imports when run as a script: the project
+# isn't installed into the venv, so script execution puts only scripts/ on the path.
+sys.path.insert(0, str(ROOT))
 
 from shared.hf_tools import hf_peek  # noqa: E402
 
-ROOT = Path(__file__).resolve().parent.parent
+
+def _read_text(name: str) -> str:
+    try:
+        return (ROOT / name).read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
+        return ""
 
 
-def _read_json(name: str, default):
-    p = ROOT / name
-    if p.exists():
-        try:
-            return json.loads(p.read_text())
-        except Exception:
-            return default
-    return default
+def _read_json(name: str, default: object) -> object:
+    try:
+        return json.loads((ROOT / name).read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError):
+        return default
 
 
 def main() -> None:
-    task = ""
-    task_file = ROOT / "task.txt"
-    if task_file.exists():
-        task = task_file.read_text().strip()
-
+    task = _read_text("task.txt")
     plan = _read_json("plan.json", {})
     evals = _read_json("eval.json", [])
 
     dataset = plan.get("hf_dataset", "")
-    config = plan.get("dataset_config")
     split_base = (plan.get("dataset_split") or "train").split("[")[0] or "train"
-    peek = hf_peek(dataset, config, split_base) if dataset else {"note": "no dataset in plan.json yet"}
+    peek = (
+        hf_peek(dataset, plan.get("dataset_config"), split_base)
+        if dataset
+        else {"note": "no dataset in plan.json yet"}
+    )
 
-    lines: list[str] = []
-    lines.append("# Kickoff — post-training lead briefing\n")
-    lines.append(
+    sections = [
+        "# Kickoff — post-training lead briefing\n",
         "You are the **post-training lead**. `AGENTS.md` is your operating manual. "
-        "This file is the brief for *this* run.\n"
-    )
-
-    lines.append("## The task\n")
-    lines.append((task or "(no task.txt provided)") + "\n")
-
-    lines.append("## Held-out eval set (what you are optimizing for)\n")
-    lines.append(
+        "This file is the brief for *this* run.\n",
+        "## The task\n",
+        (task or "(no task.txt provided)") + "\n",
+        "## Held-out eval set (what you are optimizing for)\n",
         "These are the examples the LLM judge scores after every trial. "
-        "You may NOT edit them — they are the test.\n"
-    )
-    lines.append("```json")
-    lines.append(json.dumps(evals, indent=2))
-    lines.append("```\n")
-
-    lines.append("## Seed recipe — `plan.json` (edit this between trials)\n")
-    lines.append("```json")
-    lines.append(json.dumps(plan, indent=2))
-    lines.append("```\n")
-
-    lines.append(f"## Live peek at `{dataset or '(none)'}` — the actual training data\n")
-    lines.append(
+        "You may NOT edit them — they are the test.\n",
+        "```json",
+        json.dumps(evals, indent=2),
+        "```\n",
+        "## Seed recipe — `plan.json` (edit this between trials)\n",
+        "```json",
+        json.dumps(plan, indent=2),
+        "```\n",
+        f"## Live peek at `{dataset or '(none)'}` — the actual training data\n",
         "Columns and 3 sample rows straight from HuggingFace. Confirm "
         "`input_field` / `output_field` map to real columns and that the "
-        "`prompt_template` fits this data before you train.\n"
-    )
-    lines.append("```json")
-    lines.append(json.dumps(peek, indent=2))
-    lines.append("```\n")
-
-    lines.append("## Begin\n")
-    lines.append(
+        "`prompt_template` fits this data before you train.\n",
+        "```json",
+        json.dumps(peek, indent=2),
+        "```\n",
+        "## Begin\n",
         "1. Inspect the data above (peek more splits/datasets with "
         "`uv run python backend/hf_cli.py peek <dataset>` if needed).\n"
         "2. Run your baseline trial: `uv run modal run backend/train.py::trial`.\n"
@@ -84,11 +76,11 @@ def main() -> None:
         "and `trials.jsonl` (history).\n"
         "4. Change ONE thing in `plan.json`, rerun, keep the best. Stop per `AGENTS.md`, "
         "then write the winning recipe to `plan.json` and summarize what you tried and "
-        "why the winner won.\n"
-    )
+        "why the winner won.\n",
+    ]
 
     out = ROOT / "kickoff.md"
-    out.write_text("\n".join(lines))
+    out.write_text("\n".join(sections), encoding="utf-8")
     print(f"wrote {out}  (task={'set' if task else 'empty'}, evals={len(evals)}, dataset={dataset or 'none'})")
 
 

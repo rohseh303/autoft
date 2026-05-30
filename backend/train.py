@@ -26,7 +26,7 @@ from backend.judge import judge_outputs  # noqa: E402
 
 @app.function(
     image=train_image,
-    gpu="L4",
+    gpu=os.environ.get("AUTOFT_GPU", "L4"),
     timeout=60 * 30,
     volumes={MODELS_DIR: model_volume},
     secrets=[hf_secret],
@@ -146,9 +146,11 @@ def train_run(run_id: str, plan_dict: dict, eval_examples: list[dict]) -> dict:
         tokenizer=tokenizer,
         train_dataset=ds,
         eval_dataset=eval_ds,
-        dataset_text_field="text",
-        max_seq_length=plan.training.max_seq_length,
         args=SFTConfig(
+            # dataset_text_field/max_seq_length live on SFTConfig in modern trl
+            # (they were removed as SFTTrainer kwargs); accepted by old trl too.
+            dataset_text_field="text",
+            max_seq_length=plan.training.max_seq_length,
             per_device_train_batch_size=plan.training.batch_size,
             per_device_eval_batch_size=plan.training.batch_size,
             gradient_accumulation_steps=plan.training.gradient_accumulation_steps,
@@ -331,7 +333,10 @@ def trial(
     # Judge the fine-tuned generations elementwise (one OpenAI call per example).
     judge_score = None
     if result.get("comparisons"):
-        judged = judge_outputs.remote(plan_dict.get("task_summary", ""), result["comparisons"])
+        try:
+            judged = judge_outputs.remote(plan_dict.get("task_summary", ""), result["comparisons"])
+        except Exception as e:  # missing secret / judge infra down -> degrade to eval_loss
+            judged = {"mean_score": None, "per_example": [], "error": str(e)}
         judge_score = judged.get("mean_score")
         if judge_score is None:
             print(f"[{run_id}] judge unavailable: {judged.get('error')} — objective falls back to eval_loss")

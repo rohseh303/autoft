@@ -12,32 +12,35 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections.abc import Sequence
 from pathlib import Path
 
-# Make `shared` importable when run as a plain script (not just via the package).
+# Repo root on sys.path so `shared` imports when run as a script: the project
+# isn't installed into the venv, so script execution puts only backend/ on the path.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from shared.hf_tools import hf_peek, hf_search  # noqa: E402
 
 
-def main() -> None:
+def main(argv: Sequence[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Inspect HuggingFace datasets.")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
-    pk = sub.add_parser("peek", help="Show column schema + 3 sample rows for a dataset.")
-    pk.add_argument("dataset")
-    pk.add_argument("--config", default=None)
-    pk.add_argument("--split", default="train")
+    peek = sub.add_parser("peek", help="Show column schema + 3 sample rows for a dataset.")
+    peek.add_argument("dataset")
+    peek.add_argument("--config", default=None)
+    peek.add_argument("--split", default="train")
 
-    se = sub.add_parser("search", help="Search the Hub for datasets by free text.")
-    se.add_argument("query")
-    se.add_argument("--task", default=None, help="Optional HF task-category filter.")
+    search = sub.add_parser("search", help="Search the Hub for datasets by free text.")
+    search.add_argument("query")
+    search.add_argument("--task", default=None, help="Optional HF task-category filter.")
 
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     if args.cmd == "peek":
-        print(json.dumps(hf_peek(args.dataset, args.config, args.split), indent=2))
-    elif args.cmd == "search":
-        print(json.dumps(hf_search(args.query, args.task), indent=2))
+        result = hf_peek(args.dataset, args.config, args.split)
+    else:
+        result = hf_search(args.query, args.task)
+    print(json.dumps(result, indent=2))
 
 
 if __name__ == "__main__":

@@ -8,6 +8,8 @@ eval example keeps each judgment independent.
 """
 from __future__ import annotations
 
+import json
+
 from backend.app import api_image, app, openai_secret
 
 JUDGE_MODEL = "gpt-5.4-mini"
@@ -32,8 +34,9 @@ def judge_outputs(task_summary: str, comparisons: list[dict]) -> dict:
     mean_score is None only when every call failed, so the caller falls back to
     eval_loss for the objective instead of recording a fake 0.
     """
-    import json
-
+    # `openai` is imported lazily: this module is imported at load time by
+    # train.py to register the function — including inside train_image, which
+    # does not ship openai. Only the api_image container running this body has it.
     from openai import OpenAI
 
     if not comparisons:
