@@ -1,0 +1,3 @@
+[install]
+# Use the default registry; lockfile kept in repo for reproducible installs.
+exact = false
