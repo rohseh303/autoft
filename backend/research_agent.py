@@ -151,15 +151,17 @@ def research(
 
 
 @app.local_entrypoint()
-def smoke(
+def smoke_research(
     task_description: str = "summarize legal contracts",
     eval_examples_json: str = "[]",
     preferred_model: str = "",
 ) -> None:
-    """CLI smoke test: `modal run -m backend.research_agent::smoke`.
+    """CLI smoke test: `modal run -m backend.research_agent::smoke_research`.
 
     Wraps research() with CLI-friendly arg types since modal's CLI can't
-    parse list[dict] annotations directly.
+    parse list[dict] annotations directly. Named uniquely so it doesn't
+    collide with backend.train's `smoke` entrypoint when both modules
+    register on the shared app (which happens during `modal serve`).
     """
     eval_examples = json.loads(eval_examples_json)
     plan = research.remote(
