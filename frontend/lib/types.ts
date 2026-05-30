@@ -1,6 +1,6 @@
 // Mirror of shared/schemas.py — keep in sync.
 
-export type BaseModelName = "Qwen2.5-0.5B-Instruct" | "SmolLM2-1.7B-Instruct";
+export type BaseModelName = "Qwen3.5-2B";
 
 export interface EvalExample {
   input: string;
@@ -69,11 +69,16 @@ export interface EvalComparison {
   base_output: string;
   finetuned_output: string;
   expected_output?: string | null;
+  judge_score?: number | null;
+  judge_critique?: string | null;
 }
 
 export interface RunResult {
   run_id: string;
   plan: RunPlan;
   final_loss: number | null;
+  eval_loss?: number | null;
+  judge_score?: number | null;
+  objective?: number | null;
   comparisons: EvalComparison[];
 }

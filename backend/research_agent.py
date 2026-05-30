@@ -39,11 +39,11 @@ def _build_codex_prompt() -> str:
      Do not commit to `input_field` / `output_field` column names you have not printed.
 3. Pick relevant benchmarks (just human-readable labels — v1 does not run them).
 4. Write a tight `prompt_template` using literal `{input}` and `{output}` placeholders.
-5. Set a sane TrainingConfig for a small (0.5B–1.7B) LoRA fine-tune on a single L4 GPU.
+5. Set a sane TrainingConfig for a Qwen3.5-2B bf16 LoRA fine-tune on a single L4 GPU.
 
 ## Training guidance (defaults — override only with a reason)
 - `max_steps`: 150 for tiny models; up to 250 only if the task is genuinely complex.
-- `batch_size`: 2, `gradient_accumulation_steps`: 4, `lora_r`: 16, `lora_alpha`: 16, `max_seq_length`: 2048.
+- `batch_size`: 2, `gradient_accumulation_steps`: 8 (effective batch 16), `lora_r`: 16, `lora_alpha`: 32 (=2*r), `max_seq_length`: 2048. (Qwen3.5-2B bf16 LoRA per the Unsloth cookbook.)
 - `dataset_split`: prefer `train[:2000]` or `train[:3000]` — keep it small for fast feedback.
 - Prefer datasets with a clear instruction-style schema. Avoid datasets where input or output is deeply nested.
 - `reasoning`: 2–3 sentences explaining your dataset + recipe choice in plain English. Shown to the user.

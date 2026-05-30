@@ -21,7 +21,7 @@ CATALOG: list[dict] = [
     },
     {
         "task_tags": ["summarization", "dialogue", "chat", "conversation"],
-        "hf_dataset": "Samsung/samsum",
+        "hf_dataset": "knkarthick/samsum",
         "dataset_config": None,
         "dataset_split": "train[:2000]",
         "input_field": "dialogue",

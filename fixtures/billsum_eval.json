@@ -1,0 +1,14 @@
+[
+  {
+    "input": "A bill to direct the Secretary of Veterans Affairs to establish a pilot program to furnish telehealth services to covered veterans in rural areas, to authorize the use of non-Department facilities for such services, and for other purposes.",
+    "expected_output": "Directs the VA to run a pilot program providing telehealth services to veterans in rural areas, allowing non-VA facilities to be used."
+  },
+  {
+    "input": "A bill to amend the Internal Revenue Code of 1986 to provide a refundable tax credit to small businesses that offer paid family and medical leave to their employees, and to require the Secretary of the Treasury to report annually on the credit's uptake.",
+    "expected_output": "Amends the tax code to give small businesses a refundable tax credit for offering paid family and medical leave, and requires Treasury to report yearly on how many use it."
+  },
+  {
+    "input": "A bill to require the Administrator of the Environmental Protection Agency to establish a grant program for municipalities to replace lead service lines in public water systems, with priority for disadvantaged communities.",
+    "expected_output": "Requires the EPA to create a grant program helping cities replace lead water pipes, prioritizing disadvantaged communities."
+  }
+]

@@ -1,7 +1,7 @@
 {
   "task_summary": "Summarize US Congressional bills into concise plain-English summaries.",
-  "base_model": "Qwen2.5-0.5B-Instruct",
-  "hf_dataset": "billsum",
+  "base_model": "Qwen3.5-2B",
+  "hf_dataset": "FiscalNote/billsum",
   "dataset_config": null,
   "dataset_split": "train[:2000]",
   "input_field": "text",
@@ -12,9 +12,9 @@
     "max_steps": 150,
     "learning_rate": 0.0002,
     "batch_size": 2,
-    "gradient_accumulation_steps": 4,
+    "gradient_accumulation_steps": 8,
     "lora_r": 16,
-    "lora_alpha": 16,
+    "lora_alpha": 32,
     "max_seq_length": 2048,
     "warmup_steps": 10,
     "seed": 42

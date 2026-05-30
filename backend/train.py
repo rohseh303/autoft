@@ -1,4 +1,4 @@
-"""Fine-tuning entry point. Loads model with Unsloth, runs SFTTrainer, streams metrics."""
+"""Fine-tuning entry point. Loads model with Unsloth, runs an HF Trainer, streams metrics."""
 from __future__ import annotations
 
 import json
@@ -19,17 +19,23 @@ from backend.app import (
     train_image,
 )
 
+# Importing here registers judge_outputs on the shared `app`, so a single
+# `modal run backend/train.py::trial` deploys the judge alongside the trainer.
+from backend.judge import judge_outputs  # noqa: E402
+
 
 @app.function(
     image=train_image,
-    gpu="L4",
+    gpu=os.environ.get("AUTOFT_GPU", "L4"),
     timeout=60 * 30,
     volumes={MODELS_DIR: model_volume},
     secrets=[hf_secret],
 )
 def train_run(run_id: str, plan_dict: dict, eval_examples: list[dict]) -> dict:
     """Run an SFT training job. Pushes metrics to `metrics_queue` partitioned by run_id."""
-    # Imports inside the function so they only resolve in the train image.
+    # Unsloth MUST be imported before transformers so its patches apply.
+    from unsloth import FastLanguageModel
+
     import datasets as _datasets
     _datasets.disable_caching()
     from datasets import load_dataset
@@ -39,8 +45,6 @@ def train_run(run_id: str, plan_dict: dict, eval_examples: list[dict]) -> dict:
         TrainerCallback,
         TrainingArguments,
     )
-    from unsloth import FastLanguageModel
-
 
     from shared.schemas import (
         MODEL_REGISTRY,
@@ -64,7 +68,11 @@ def train_run(run_id: str, plan_dict: dict, eval_examples: list[dict]) -> dict:
         model_name=hf_id,
         max_seq_length=plan.training.max_seq_length,
         dtype=None,
-        load_in_4bit=True,
+        # Qwen3.5: QLoRA (4-bit) is NOT recommended (large quantization error per
+        # Unsloth's Qwen3.5 guide); use bf16/16-bit LoRA instead. ~5GB for 2B.
+        load_in_4bit=False,
+        load_in_16bit=True,
+        full_finetuning=False,
         cache_dir=f"{MODELS_DIR}/hf_cache",
     )
 
@@ -78,7 +86,10 @@ def train_run(run_id: str, plan_dict: dict, eval_examples: list[dict]) -> dict:
         lora_alpha=plan.training.lora_alpha,
         lora_dropout=0,
         bias="none",
-        use_gradient_checkpointing="unsloth",
+        # No checkpointing/offload: a 2B bf16 model (~5GB) fits easily on these
+        # GPUs, so the "unsloth" offload (for long-context/low-VRAM) just slows us
+        # down. Flip back to "unsloth" only for big models / long context.
+        use_gradient_checkpointing=False,
         random_state=plan.training.seed,
         max_seq_length=plan.training.max_seq_length,
     )
@@ -115,11 +126,18 @@ def train_run(run_id: str, plan_dict: dict, eval_examples: list[dict]) -> dict:
     max_len = plan.training.max_seq_length
 
     def _tokenize_batch(batch):
-        enc = tokenizer(batch["text"], truncation=True, max_length=max_len, padding=False)
-        return enc
+        return tokenizer(batch["text"], truncation=True, max_length=max_len, padding=False)
 
     ds = ds.map(_tokenize_batch, batched=True, remove_columns=["text"])
     print(f"[autoft] pre-tokenized {len(ds)} examples; columns={ds.column_names}")
+
+    # Carve a held-out slice so we can report generalization (eval_loss), not
+    # just training loss. Best-effort: tiny datasets just skip it.
+    eval_ds = None
+    if len(ds) >= 32:
+        n_eval = min(64, max(8, len(ds) // 10))
+        _split = ds.train_test_split(test_size=n_eval, seed=plan.training.seed)
+        ds, eval_ds = _split["train"], _split["test"]
 
     # Streaming callback ---------------------------------------------------
     start = time.time()
@@ -139,7 +157,7 @@ def train_run(run_id: str, plan_dict: dict, eval_examples: list[dict]) -> dict:
             )
             metrics_queue.put(metric.model_dump(), partition=run_id)
 
-    push_status("training", "SFTTrainer running...")
+    push_status("training", "Trainer running...")
 
     output_dir = f"{MODELS_DIR}/runs/{run_id}"
     Path(output_dir).mkdir(parents=True, exist_ok=True)
@@ -152,6 +170,7 @@ def train_run(run_id: str, plan_dict: dict, eval_examples: list[dict]) -> dict:
 
     training_args = TrainingArguments(
         per_device_train_batch_size=plan.training.batch_size,
+        per_device_eval_batch_size=plan.training.batch_size,
         gradient_accumulation_steps=plan.training.gradient_accumulation_steps,
         warmup_steps=plan.training.warmup_steps,
         max_steps=plan.training.max_steps,
@@ -175,12 +194,23 @@ def train_run(run_id: str, plan_dict: dict, eval_examples: list[dict]) -> dict:
         model=model,
         args=training_args,
         train_dataset=ds,
+        eval_dataset=eval_ds,
         data_collator=DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False),
         callbacks=[StreamCallback()],
     )
 
     train_result = trainer.train()
     final_loss = float(train_result.training_loss) if train_result.training_loss else None
+
+    # Held-out eval loss — the generalization signal the optimizer reads.
+    eval_loss = None
+    if eval_ds is not None:
+        try:
+            push_status("evaluating", "Computing held-out eval loss...")
+            _ev = trainer.evaluate().get("eval_loss")
+            eval_loss = float(_ev) if _ev is not None else None
+        except Exception as e:  # eval is best-effort; never fail the run on it
+            print(f"[eval_loss] skipped: {e}")
 
     # Save LoRA adapter for inference comparison
     adapter_dir = f"{output_dir}/lora"
@@ -198,7 +228,11 @@ def train_run(run_id: str, plan_dict: dict, eval_examples: list[dict]) -> dict:
     )
 
     result = RunResult(
-        run_id=run_id, plan=plan, final_loss=final_loss, comparisons=comparisons
+        run_id=run_id,
+        plan=plan,
+        final_loss=final_loss,
+        eval_loss=eval_loss,
+        comparisons=comparisons,
     )
     run_results[run_id] = result.model_dump()
 
@@ -250,27 +284,108 @@ def _run_eval(plan, model, tokenizer, eval_examples):
 
 
 @app.local_entrypoint()
+def trial(
+    plan: str = "plan.json",
+    out: str = "result.json",
+    evals: str = "eval.json",
+    ledger: str = "trials.jsonl",
+):
+    """One optimization trial — train + held-out eval + LLM judge -> result.json.
+
+    The post-training lead (Codex) edits `plan.json`, runs this, then reads
+    `result.json` (generations + judge critiques) and `trials.jsonl` (history).
+
+        modal run backend/train.py::trial --plan plan.json --out result.json
+    """
+    import json
+    import uuid
+    from pathlib import Path
+
+    plan_dict = json.loads(Path(plan).read_text())
+    eval_examples = []
+    if Path(evals).exists():
+        eval_examples = json.loads(Path(evals).read_text())
+
+    run_id = f"trial-{uuid.uuid4().hex[:8]}"
+    print(
+        f"[{run_id}] training {plan_dict.get('base_model')} on "
+        f"{plan_dict.get('hf_dataset')} ({plan_dict.get('dataset_split')})..."
+    )
+
+    result = train_run.remote(run_id, plan_dict, eval_examples)
+
+    # Judge the fine-tuned generations (OpenAI, on Modal). Degrade to eval_loss
+    # if the judge can't run (missing secret / infra down).
+    judge_score = None
+    if result.get("comparisons"):
+        try:
+            judged = judge_outputs.remote(plan_dict.get("task_summary", ""), result["comparisons"])
+        except Exception as e:  # noqa: BLE001
+            judged = {"mean_score": None, "per_example": [], "error": str(e)}
+        judge_score = judged.get("mean_score")
+        if judge_score is None:
+            print(f"[{run_id}] judge unavailable: {judged.get('error')} — objective falls back to eval_loss")
+        result["judge_score"] = judge_score
+        for comp, j in zip(result["comparisons"], judged.get("per_example", [])):
+            comp["judge_score"] = j.get("score")
+            comp["judge_critique"] = j.get("critique")
+
+    # Objective: judge score is primary; fall back to negative eval loss.
+    eval_loss = result.get("eval_loss")
+    if judge_score is not None:
+        objective = judge_score
+    elif eval_loss is not None:
+        objective = -eval_loss
+    else:
+        objective = -(result.get("final_loss") or 0.0)
+    result["objective"] = objective
+
+    Path(out).write_text(json.dumps(result, indent=2))
+
+    record = {
+        "run_id": run_id,
+        "objective": round(objective, 4),
+        "judge_score": judge_score,
+        "eval_loss": round(eval_loss, 4) if eval_loss is not None else None,
+        "final_loss": round(result["final_loss"], 4) if result.get("final_loss") is not None else None,
+        "base_model": plan_dict.get("base_model"),
+        "hf_dataset": plan_dict.get("hf_dataset"),
+        "dataset_split": plan_dict.get("dataset_split"),
+        "prompt_template": plan_dict.get("prompt_template"),
+        "training": plan_dict.get("training"),
+    }
+    with open(ledger, "a") as f:
+        f.write(json.dumps(record) + "\n")
+
+    print(
+        f"[{run_id}] objective={objective:.3f}  judge={judge_score}  "
+        f"eval_loss={eval_loss}  final_loss={result.get('final_loss')}"
+    )
+    print(f"[{run_id}] wrote {out}; appended {ledger}. Read {out} for per-example outputs + critiques.")
+
+
+@app.local_entrypoint()
 def smoke():
-    """Local smoke test: `modal run backend/train.py` runs billsum + Qwen2.5-0.5B."""
+    """Local smoke test: `modal run backend/train.py::smoke` (billsum + Qwen3.5-2B)."""
     import uuid
 
     plan = {
-        "task_summary": "Follow instructions in the style of Alpaca.",
-        "base_model": "Qwen2.5-0.5B-Instruct",
-        "hf_dataset": "yahma/alpaca-cleaned",
+        "task_summary": "Summarize US Congressional bills concisely.",
+        "base_model": "Qwen3.5-2B",
+        "hf_dataset": "FiscalNote/billsum",
         "dataset_config": None,
         "dataset_split": "train[:500]",
-        "input_field": "instruction",
-        "output_field": "output",
-        "prompt_template": "### Instruction:\n{input}\n\n### Response:\n{output}",
-        "benchmarks": ["alpaca-eval"],
+        "input_field": "text",
+        "output_field": "summary",
+        "prompt_template": "### Instruction:\nSummarize the following bill:\n\n{input}\n\n### Response:\n{output}",
+        "benchmarks": ["billsum-rouge"],
         "training": {
             "max_steps": 30,
             "learning_rate": 2e-4,
             "batch_size": 2,
-            "gradient_accumulation_steps": 4,
+            "gradient_accumulation_steps": 8,
             "lora_r": 16,
-            "lora_alpha": 16,
+            "lora_alpha": 32,
             "max_seq_length": 1024,
             "warmup_steps": 5,
             "seed": 42,
@@ -278,7 +393,7 @@ def smoke():
         "reasoning": "smoke",
     }
     eval_examples = [
-        {"input": "Write a haiku about an autonomous fine-tuning system.", "expected_output": None},
+        {"input": "A bill to require the Secretary of Health to publish guidelines on AI in clinical decision-making by 2027.", "expected_output": None},
     ]
     run_id = f"smoke-{uuid.uuid4().hex[:8]}"
     out = train_run.remote(run_id, plan, eval_examples)
