@@ -23,7 +23,7 @@ export function mockPlan(req: UserRequest): RunPlan {
   const c = pick(req.task_description);
   return {
     task_summary: req.task_description.trim().replace(/\.$/, "") || "Fine-tune a small model",
-    base_model: req.preferred_model ?? "Qwen2.5-0.5B-Instruct",
+    base_model: req.preferred_model ?? "Qwen3.5-2B",
     hf_dataset: c.ds,
     dataset_config: c.cfg,
     dataset_split: "train[:2000]",

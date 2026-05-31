@@ -1,11 +1,18 @@
 // AutoFT Studio BFF — Bun + Elysia.
-// Three jobs (this is why Elysia earns its seat, not theater):
+// Three jobs:
 //   1. serve the built client in prod
-//   2. proxy /api/* to the real Modal backend (research / train / SSE stream)
-//   3. MOCK MODE when MODAL_API_BASE is unset — full simulated run, zero infra
+//   2. proxy /api/* to a backend — local FastAPI (AUTOFT_BACKEND) or deployed
+//      Modal (MODAL_API_BASE). AUTOFT_BACKEND wins if both are set.
+//   3. MOCK MODE when neither is set — full simulated run, zero infra.
 //
-// SSE is normalized so the client speaks ONE event vocabulary regardless of
-// whether it's talking to Modal or the mock:  status | metric | thought | sample | result
+// SSE is normalized to one client vocabulary regardless of source:
+//   status | metric | thought | sample | result   (+ plan on research)
+//
+// Backend capabilities:
+//   local — streams BOTH research (/research/stream) and training.
+//   modal — training streams; /research is blocking, so we narrate live process
+//           steps while awaiting it, then emit the real plan.
+//   mock  — everything simulated in-process here.
 import { Elysia } from "elysia";
 import { cors } from "@elysiajs/cors";
 import { existsSync } from "node:fs";
@@ -16,8 +23,11 @@ import {
   lossAt, lrAt, gradAt, sampleAt, sleep,
 } from "./mock";
 
+const BACKEND = process.env.AUTOFT_BACKEND?.replace(/\/$/, "") || "";
 const MODAL = process.env.MODAL_API_BASE?.replace(/\/$/, "") || "";
-const MOCK = MODAL === "";
+const PROXY = BACKEND || MODAL;
+const MODE = BACKEND ? "local" : MODAL ? "modal" : "mock";
+const MOCK = MODE === "mock";
 const PORT = Number(process.env.PORT ?? 8787);
 const DIST = join(import.meta.dir, "..", "dist");
 
@@ -31,18 +41,21 @@ const sseHeaders = {
 // in-memory run store for mock mode
 const runs = new Map<string, { plan: RunPlan; req: UserRequest }>();
 
+// proxy to the active backend; returns the upstream Response so SSE bodies
+// stream straight through.
+function forward(path: string, init?: RequestInit): Promise<Response> {
+  return fetch(`${PROXY}${path}`, init);
+}
+
 const app = new Elysia()
   .use(cors())
-  .get("/api/health", () => ({ ok: true, mode: MOCK ? "mock" : "modal", modal: MODAL || null }))
+  .get("/api/health", () => ({ ok: true, mode: MODE, backend: PROXY || null }))
 
   // --- research: returns a RunPlan ----------------------------------------
   .post("/api/research", async ({ body }) => {
     const req = body as UserRequest;
-    if (MOCK) {
-      await sleep(450);
-      return mockPlan(req);
-    }
-    const r = await fetch(`${MODAL}/research`, {
+    if (MOCK) { await sleep(450); return mockPlan(req); }
+    const r = await forward("/research", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(req),
@@ -51,26 +64,10 @@ const app = new Elysia()
     return r.json();
   })
 
-  // --- research as a live thought stream (mock-only enhancement) -----------
-  // Real backend has no thought stream yet; client falls back to /api/research.
+  // --- research as a live thought stream ----------------------------------
   .post("/api/research/stream", async ({ body }) => {
     const req = body as UserRequest;
-<<<<<<< Updated upstream
-    if (!MOCK) return new Response("thought-stream is mock-only", { status: 404 });
-    const thoughts = mockThoughts(req);
-    const plan = mockPlan(req);
-    const stream = new ReadableStream({
-      async start(c) {
-        const enc = new TextEncoder();
-        const send = (ev: string, data: unknown) =>
-          c.enqueue(enc.encode(`event: ${ev}\ndata: ${JSON.stringify(data)}\n\n`));
-        for (const t of thoughts) { send("thought", t); await sleep(620); }
-        send("plan", plan);
-        c.close();
-      },
-    });
-    return new Response(stream, { headers: sseHeaders });
-=======
+
     if (MOCK) {
       const thoughts = mockThoughts(req);
       const plan = mockPlan(req);
@@ -86,79 +83,74 @@ const app = new Elysia()
       });
       return new Response(stream, { headers: sseHeaders });
     }
+
     if (BACKEND) {
-      // proxy the SSE straight through from the local backend
+      // local backend streams thoughts natively — proxy straight through
       return forward("/research/stream", {
         method: "POST",
         headers: { "content-type": "application/json", accept: "text/event-stream" },
         body: JSON.stringify(req),
       });
     }
+
     // MODAL: /research is a blocking Codex call with no native stream. Narrate
-    // live process steps while we await it, then emit the real plan. The thoughts
-    // are honest descriptions of what the agent is actually doing, not fabricated
-    // dataset decisions — the real decision arrives in the `plan` event.
-    {
-      const narration = [
-        { kind: "note", text: `Reading your task: "${req.task_description.trim()}"` },
-        { kind: "search", text: "Spinning up the research agent on Modal", detail: "OpenAI Codex CLI in a sandbox" },
-        { kind: "search", text: "Searching HuggingFace for a dataset that fits", detail: "ranking candidates by relevance + downloads" },
-        { kind: "peek", text: "Inspecting candidate datasets", detail: "reading columns + sample rows" },
-        { kind: "peek", text: "Verifying the schema lines up with the task", detail: "checking input/output fields" },
-        { kind: "note", text: "Designing the training recipe", detail: "LoRA rank, steps, prompt template" },
-        { kind: "note", text: "Still working — the real agent is thorough", detail: "this usually takes ~30-90s" },
-      ];
-      const stream = new ReadableStream({
-        async start(c) {
-          const enc = new TextEncoder();
-          const send = (ev: string, data: unknown) =>
-            c.enqueue(enc.encode(`event: ${ev}\ndata: ${JSON.stringify(data)}\n\n`));
-          let done = false;
-          // kick off the real blocking research call
-          const planPromise = forward("/research", {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify(req),
-          }).then((r) => (r.ok ? r.json() : Promise.reject(new Error(`research ${r.status}`))));
+    // honest process steps while we await it, then emit the real plan. The real
+    // dataset decision arrives in the `plan` event — narration isn't fabricated.
+    const narration = [
+      { kind: "note", text: `Reading your task: "${req.task_description.trim()}"` },
+      { kind: "search", text: "Spinning up the research agent on Modal", detail: "OpenAI Codex CLI in a sandbox" },
+      { kind: "search", text: "Searching HuggingFace for a dataset that fits", detail: "ranking candidates by relevance + downloads" },
+      { kind: "peek", text: "Inspecting candidate datasets", detail: "reading columns + sample rows" },
+      { kind: "peek", text: "Verifying the schema lines up with the task", detail: "checking input/output fields" },
+      { kind: "note", text: "Designing the training recipe", detail: "LoRA rank, steps, prompt template" },
+      { kind: "note", text: "Still working — the real agent is thorough", detail: "this usually takes ~30-90s" },
+    ];
+    const stream = new ReadableStream({
+      async start(c) {
+        const enc = new TextEncoder();
+        const send = (ev: string, data: unknown) =>
+          c.enqueue(enc.encode(`event: ${ev}\ndata: ${JSON.stringify(data)}\n\n`));
+        let done = false;
+        const planPromise = forward("/research", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(req),
+        }).then((r) => (r.ok ? r.json() : Promise.reject(new Error(`research ${r.status}`))));
 
-          // drip narration in order, then hold on the last "still working" line
-          (async () => {
-            let i = 0;
-            while (!done) {
-              send("thought", narration[Math.min(i, narration.length - 1)]);
-              i++;
-              await sleep(2600);
-            }
-          })();
-
-          try {
-            const plan = await planPromise;
-            done = true;
-            send("thought", { kind: "decision", text: `Chose ${plan.hf_dataset}`, detail: (plan.reasoning || "").split(". ")[0] });
-            await sleep(250);
-            send("plan", plan);
-          } catch (e) {
-            done = true;
-            send("error", { message: e instanceof Error ? e.message : String(e) });
+        (async () => {
+          let i = 0;
+          while (!done) {
+            send("thought", narration[Math.min(i, narration.length - 1)]);
+            i++;
+            await sleep(2600);
           }
-          c.close();
-        },
-      });
-      return new Response(stream, { headers: sseHeaders });
-    }
+        })();
+
+        try {
+          const plan = await planPromise;
+          done = true;
+          send("thought", { kind: "decision", text: `Chose ${plan.hf_dataset}`, detail: (plan.reasoning || "").split(". ")[0] });
+          await sleep(250);
+          send("plan", plan);
+        } catch (e) {
+          done = true;
+          send("error", { message: e instanceof Error ? e.message : String(e) });
+        }
+        c.close();
+      },
+    });
+    return new Response(stream, { headers: sseHeaders });
   })
 
   // --- download the trained LoRA adapter (take the model) -----------------
   .get("/api/run/:id/download", ({ params }) => {
     if (MOCK) {
-      // synthesize a tiny zip-less placeholder so the button does something in demo
       return new Response(
         `AutoFT demo mode — no real adapter to export.\nRun against the Modal backend to download a real LoRA.\n`,
         { headers: { "Content-Type": "text/plain", "Content-Disposition": `attachment; filename="${params.id}-demo.txt"` } },
       );
     }
     return forward(`/run/${params.id}/download`, { headers: { accept: "application/zip" } });
->>>>>>> Stashed changes
   })
 
   // --- train: spawn, return run_id ----------------------------------------
@@ -169,7 +161,7 @@ const app = new Elysia()
       runs.set(run_id, { plan, req: { task_description: plan.task_summary, eval_examples: eval_examples ?? [] } });
       return { run_id };
     }
-    const r = await fetch(`${MODAL}/train`, {
+    const r = await forward("/train", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ plan, eval_examples: eval_examples ?? [] }),
@@ -182,8 +174,7 @@ const app = new Elysia()
   .get("/api/run/:id/stream", ({ params }) => {
     const runId = params.id;
     if (!MOCK) {
-      // Pure passthrough proxy of Modal's SSE — already speaks status|metric|result.
-      return fetch(`${MODAL}/run/${runId}/stream`, { headers: { accept: "text/event-stream" } });
+      return forward(`/run/${runId}/stream`, { headers: { accept: "text/event-stream" } });
     }
     const entry = runs.get(runId);
     const stream = new ReadableStream({
@@ -195,7 +186,6 @@ const app = new Elysia()
         const { plan, req } = entry;
         const max = plan.training.max_steps;
 
-        // loading phase — granular status so there's no dead air
         for (const m of ["pulling image", `downloading ${plan.base_model}`, `loading ${plan.hf_dataset}`, "tokenizing 2000 rows"]) {
           send("status", { run_id: runId, state: "loading", message: m, plan });
           await sleep(550);
@@ -210,11 +200,10 @@ const app = new Elysia()
             grad_norm: gradAt(step), epoch: (step * plan.training.batch_size * plan.training.gradient_accumulation_steps) / 2000,
             elapsed_seconds: (Date.now() - start) / 1000,
           });
-          // re-sample the model's words every ~12 steps — the showpiece
           if (step === 1 || step % 12 === 0 || step === max) {
             send("sample", { run_id: runId, step, prompt: req.eval_examples[0]?.input ?? "eval prompt", text: sampleAt(step, max) });
           }
-          await sleep(38); // ~6s total — fast enough to watch, slow enough to feel real
+          await sleep(38);
         }
         send("status", { run_id: runId, state: "evaluating", message: "generating base vs fine-tuned", plan });
         await sleep(900);
@@ -233,7 +222,7 @@ const app = new Elysia()
       if (!e) return new Response("not found", { status: 404 });
       return mockResult(params.id, e.plan, e.req);
     }
-    const r = await fetch(`${MODAL}/run/${params.id}/result`);
+    const r = await forward(`/run/${params.id}/result`);
     if (!r.ok) return new Response("result not ready", { status: r.status });
     return r.json();
   })
@@ -242,12 +231,12 @@ const app = new Elysia()
   .get("/*", ({ path }) => {
     if (!existsSync(DIST)) return new Response("Run `bun run build` first (or use `bun run dev`).", { status: 404 });
     const file = Bun.file(join(DIST, path === "/" ? "index.html" : path));
-    return file.exists().then((ok) => (ok ? file : Bun.file(join(DIST, "index.html")))); // SPA fallback
+    return file.exists().then((ok) => (ok ? file : Bun.file(join(DIST, "index.html"))));
   })
 
   .listen(PORT);
 
 console.log(`\n  AutoFT Studio BFF  ·  http://localhost:${PORT}`);
-console.log(`  mode: ${MOCK ? "MOCK (no Modal — full simulated run)" : `MODAL → ${MODAL}`}\n`);
+console.log(`  mode: ${MODE}${PROXY ? ` → ${PROXY}` : " (simulated in-process)"}\n`);
 
 export type App = typeof app;

@@ -19,13 +19,6 @@ export function Reveal({ result, points, onReset }: { result: RunResult; points:
           <button className="rv-again" onClick={onReset}>Train another →</button>
         </div>
       </div>
-<<<<<<< Updated upstream
-      {result.comparisons.map((c, i) => (
-        <Compare key={i} input={c.input} base={c.base_output} ft={c.finetuned_output} expected={c.expected_output} />
-      ))}
-
-      {result.scorecard && <ScoreCard s={result.scorecard} />}
-=======
       {result.comparisons.length > 0 ? (
         result.comparisons.map((c, i) => (
           <Compare
@@ -46,18 +39,12 @@ export function Reveal({ result, points, onReset }: { result: RunResult; points:
       )}
 
       <ScoreCard result={result} />
->>>>>>> Stashed changes
 
       <TechCard plan={result.plan} points={points} finalLoss={result.final_loss} />
     </div>
   );
 }
 
-<<<<<<< Updated upstream
-// The evidence — a blind-preference verdict + soft base-vs-yours measures.
-// Warm and editorial on purpose: a report card, not a dashboard.
-function ScoreCard({ s }: { s: Scorecard }) {
-=======
 function verdictFor(judge: number): string {
   return judge >= 9 ? "The judge rated your model excellent."
     : judge >= 7 ? "The judge clearly preferred your model."
@@ -86,19 +73,11 @@ function ScoreCard({ result }: { result: RunResult }) {
   if (result.final_loss != null) stats.push({ label: "train loss", v: result.final_loss.toFixed(3) });
   if (result.objective != null) stats.push({ label: "objective", v: result.objective.toFixed(2) });
 
->>>>>>> Stashed changes
   return (
     <section className="score card-hard rise">
       <span className="kicker">how it performed</span>
       <h3 className="score-verdict">{verdict}</h3>
 
-<<<<<<< Updated upstream
-      <div className="judge">
-        <div className="judge-pips" aria-hidden>
-          {Array.from({ length: s.judge_total }).map((_, i) => (
-            <span key={i} className={`pip ${i < s.judge_wins ? "won" : ""}`} />
-          ))}
-=======
       {stats.length > 0 && (
         <div className="judge-stats">
           {stats.map((st) => (
@@ -118,7 +97,6 @@ function ScoreCard({ result }: { result: RunResult }) {
             ))}
           </div>
           <p className="judge-text">judge score <strong>{wins}/{total}</strong></p>
->>>>>>> Stashed changes
         </div>
       )}
 
@@ -129,15 +107,9 @@ function ScoreCard({ result }: { result: RunResult }) {
       )}
 
       <p className="score-note">
-<<<<<<< Updated upstream
-        {s.simulated
-          ? "Illustrative scores — demo mode simulates the eval. Wire the backend judge + ROUGE harness for real numbers."
-          : "Measured on your eval examples against the untuned base model."}
-=======
         {simulated
           ? "Illustrative scores — demo mode simulates the eval. The real backend's LLM judge + held-out eval fill these in on a live run."
           : "Scored by the LLM judge on your test prompt against the untuned base model."}
->>>>>>> Stashed changes
       </p>
     </section>
   );
@@ -196,7 +168,7 @@ function TechCard({ plan, points, finalLoss }: {
       <div className="tech-specs">
         <Spec label="trainable params" v={fmtParams(trainable)} sub={`${pctTrainable.toFixed(2)}% of ${fmtParams(totalP)}`} />
         <Spec label="adapter" v={`LoRA r=${t.lora_r}`} sub={`α=${t.lora_alpha} · 7 proj layers`} />
-        <Spec label="precision" v="4-bit QLoRA" sub="bf16 compute" />
+        <Spec label="precision" v="16-bit LoRA" sub="bf16 compute" />
         <Spec label="effective batch" v={String(t.batch_size * t.gradient_accumulation_steps)} sub={`${t.batch_size} × ${t.gradient_accumulation_steps} accum`} />
         <Spec label="optimizer" v="adamw_8bit" sub={`lr ${t.learning_rate.toExponential(0)} · linear`} />
         <Spec label="seq length" v={`${t.max_seq_length}`} sub={`${t.warmup_steps} warmup steps`} />
@@ -238,14 +210,15 @@ function Spec({ label, v, sub }: { label: string; v: string; sub: string }) {
   );
 }
 
-// rough param math so the internals read true to the chosen base model
-function baseParams(model: string): number {
-  return model.includes("1.7B") ? 1.7e9 : 0.5e9;
+// rough param math so the internals read true to the chosen base model.
+// Single base today: Qwen2.5-1.5B (~1.5B params, d_model≈1536, 28 layers).
+function baseParams(_model: string): number {
+  return 1.5e9;
 }
-function trainableParams(model: string, r: number): number {
+function trainableParams(_model: string, r: number): number {
   // LoRA params ≈ 2 · r · d_model · (#target matrices) · #layers — approximated
-  const d = model.includes("1.7B") ? 2048 : 896;
-  const layers = model.includes("1.7B") ? 24 : 24;
+  const d = 1536;
+  const layers = 28;
   return 2 * r * d * 7 * layers;
 }
 function fmtParams(n: number): string {
@@ -255,8 +228,9 @@ function fmtParams(n: number): string {
   return String(n);
 }
 
-function Compare({ input, base, ft, expected }: {
+function Compare({ input, base, ft, expected, judgeScore, critique }: {
   input: string; base: string; ft: string; expected?: string | null;
+  judgeScore?: number | null; critique?: string | null;
 }) {
   const [split, setSplit] = useState(50);
   const ref = useRef<HTMLDivElement>(null);
@@ -268,7 +242,11 @@ function Compare({ input, base, ft, expected }: {
 
   return (
     <div className="cmp card-hard">
-      <div className="cmp-in"><span className="kicker">input</span><p>{input}</p></div>
+      <div className="cmp-in">
+        <span className="kicker">input</span>
+        {judgeScore != null && <span className="cmp-judge mono">judge {judgeScore.toFixed(1)}/10</span>}
+        <p>{input}</p>
+      </div>
 
       <div
         className="cmp-stage" ref={ref}
@@ -288,6 +266,12 @@ function Compare({ input, base, ft, expected }: {
         </div>
       </div>
 
+      {critique && (
+        <div className="cmp-critique">
+          <span className="kicker">judge note</span>
+          <p>{critique}</p>
+        </div>
+      )}
       {expected && <div className="cmp-exp"><span className="kicker">expected</span><p>{expected}</p></div>}
     </div>
   );

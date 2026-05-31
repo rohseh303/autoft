@@ -6,7 +6,10 @@ from pydantic import BaseModel, Field
 BaseModelName = Literal["Qwen3.5-2B"]
 
 MODEL_REGISTRY: dict[str, str] = {
-    "Qwen3.5-2B": "unsloth/Qwen3.5-2B",
+    # "Qwen3.5-2B" is a display label. unsloth/Qwen3.5-2B on HF is an
+    # image-text-to-text (vision) model that crashes text tokenization, so map
+    # the label to a real small TEXT model.
+    "Qwen3.5-2B": "unsloth/Qwen2.5-1.5B-Instruct",
 }
 
 

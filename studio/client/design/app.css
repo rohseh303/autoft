@@ -337,8 +337,6 @@ body[data-theater="on"] .pulse-breathe { stroke: var(--ghost-2); }
 .spec { background: var(--paper); padding: 12px 14px; }
 .spec-v { font-size: 15px; color: var(--ink); margin-top: 4px; }
 .spec-sub { font-size: 11px; color: var(--ink-3); margin-top: 2px; }
-<<<<<<< Updated upstream
-=======
 
 /* ===== judge fields surfaced from the real backend ===================== */
 .judge-stats { display: flex; gap: 10px; margin: 18px 0 4px; }
@@ -377,4 +375,3 @@ body[data-theater="on"] .pulse-breathe { stroke: var(--ghost-2); }
 }
 .rv-export:hover { background: var(--signal); border-color: var(--signal); color: #fff; }
 .rv-export-sub { font-family: var(--mono); font-size: 10px; font-weight: 400; opacity: 0.7; }
->>>>>>> Stashed changes

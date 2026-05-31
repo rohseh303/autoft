@@ -60,7 +60,7 @@ out-of-range values:
 | field | range / values | default | notes |
 |---|---|---|---|
 | `training.learning_rate` | > 0 | 2e-4 | highest-leverage knob; sweep 1e-4 → 5e-4 first |
-| `training.max_steps` | 10–2000 | 150 | raise if eval_loss still dropping; lower if overfitting |
+| `training.max_steps` | 10–100 | 150 | raise if eval_loss still dropping; lower if overfitting |
 | `training.lora_r` | 4–128 | 16 | capacity; raise for harder tasks (pair with alpha) |
 | `training.lora_alpha` | 4–128 | 16 | usually keep ≈ lora_r |
 | `training.batch_size` | 1–16 | 2 | L4 is memory-bound; raise with care |
